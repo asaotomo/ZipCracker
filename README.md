@@ -2,8 +2,8 @@
 
 ---
 
-ZipCracker是一个有Hx0战队开发的用于破解密码保护Zip文件的高性能Python工具。它使用字典攻击来猜测 Zip 文件的密码并提取其中的内容。该程序支持识别"伪加密"的 Zip 文件，并能够自动修复它，非常适合在CTF比赛中使用它。
-程序自带6000个常用的压缩包字典，同时还会生成0-6位的纯数字典。
+ZipCracker是由Hx0战队开发的用于破解密码保护Zip文件的高性能Python工具。它使用字典攻击来猜测 Zip 文件的密码并提取其中的内容。该程序支持识别"伪加密"的 Zip 文件，并能够自动修复它，非常适合在CTF比赛中使用它。
+程序自带6000个常用的爆破字典，同时还会生成0-6位的纯数字字典。
 ### 使用方法
 
 ---
@@ -32,7 +32,9 @@ python3 ZipCracker.py test02.zip MyDict.txt
 ---
 
 **扫描关注战队公众号，获取最新动态**
+
 [![](https://cdn.nlark.com/yuque/0/2023/png/12839102/1690652630290-1f2276f2-6938-464f-8817-7381aafc0398.png#averageHue=%23a5a5a5&clientId=u1aad30e8-7651-4&from=paste&id=u743b2692&originHeight=1440&originWidth=1440&originalType=url&ratio=2&rotation=0&showTitle=false&status=done&style=none&taskId=u4325de4f-9472-465a-a2d4-01fd56d4fd0&title=)](https://user-images.githubusercontent.com/67818638/149507366-4ada14db-a972-4071-bbb6-197659f61ced.png)
 **【知识星球】福利大放送**
+
 [![](https://cdn.nlark.com/yuque/0/2023/png/12839102/1690652630207-4de5d67e-3f41-4407-9350-22ccde6bc098.png#averageHue=%23e9706d&clientId=u1aad30e8-7651-4&from=paste&id=u67284c29&originHeight=958&originWidth=580&originalType=url&ratio=2&rotation=0&showTitle=false&status=done&style=none&taskId=u53ae5c6a-b528-45a9-b232-ff068d444bf&title=)](https://user-images.githubusercontent.com/67818638/210543877-95b791f0-c677-4019-bb6e-504eefd8164e.png)
 
