@@ -74,7 +74,8 @@ if __name__ == '__main__':
 #Coded By Asatomo               Update:2023.07.30
         """)
     if len(sys.argv) == 1:
-        print("[*]用法1(内置字典):Python3 Hx0_Zip_Cracker.py YourZipFile.zip \n[*]用法2(自定义字典):Python3 Hx0_Zip_Cracker.py  YourZipFile.zip  YourDict.txt")
+        print(
+            "[*]用法1(内置字典):Python3 Hx0_Zip_Cracker.py YourZipFile.zip \n[*]用法2(自定义字典):Python3 Hx0_Zip_Cracker.py  YourZipFile.zip  YourDict.txt")
         os._exit(0)
     zip_file = sys.argv[1]
     if is_zip_encrypted(zip_file):
@@ -96,11 +97,13 @@ if __name__ == '__main__':
             password_list = []
             if len(sys.argv) > 2:  # 检查是否指定了自定义字典文件
                 dict_file = sys.argv[2]
+                dict_type = "用户自定义字典"
             else:
                 dict_file = 'password_list.txt'
+                dict_type = "系统内置字典"
             with open('password_list.txt', 'r') as f:
                 password_list += [line.strip() for line in f.readlines()]
-            print(f'[+]加载用户字典成功！')
+            print(f'[+]加载{dict_type}成功！')
             for length in range(1, 7):
                 password_list += [f'{i:0{length}d}' for i in range(10 ** length)]
             print(f'[+]加载0-6位纯数字字典成功！')
