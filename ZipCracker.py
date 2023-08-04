@@ -43,7 +43,7 @@ def crack_password(password, stop):
         zf = zipfile.ZipFile(zip_file)
         zf.setpassword(password.encode())
         zf.extractall()
-        print(f'\n[*]恭喜你！密码破解成功,该压缩包的密码为：{password}')
+        print(f'\n[*]恭喜您！密码破解成功,该压缩包的密码为：{password}')
         success = True
         filenames = zf.namelist()
         print(f"[*]系统已为您自动提取出{len(filenames)}个文件：{filenames}")
@@ -88,7 +88,7 @@ if __name__ == '__main__':
             zf.extractall()
             filenames = zf.namelist()
             print(
-                f"[*]压缩包 {zip_file} 为伪加密，系统已为您生成修复后的压缩包({fix_zip_name})，并自动提取出出{len(filenames)}个文件：{filenames}")
+                f"[*]压缩包 {zip_file} 为伪加密，系统已为您生成修复后的压缩包({fix_zip_name})，并自动提取出{len(filenames)}个文件：{filenames}")
             os._exit(0)
         except Exception as e:
             zf = zipfile.ZipFile(zip_file)
