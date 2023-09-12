@@ -1,10 +1,13 @@
 import os
 import shutil
-import zipfile
 import sys
 from threading import Thread
 from collections import OrderedDict
 import time
+import zipfile
+import binascii
+import string
+import itertools as its
 
 
 def is_zip_encrypted(file_path):
@@ -63,6 +66,35 @@ def crack_password(password, stop):
     return False
 
 
+def get_crc(zip_file, fz):
+    key = 0
+    for filename in fz.namelist():
+        getSize = fz.getinfo(filename).file_size
+        if getSize <= 6:
+            sw = input(
+                f'[!]系统监测到压缩包 {zip_file} 中的 {filename} 文件大小为{getSize}字节，是否尝试通过CRC32碰撞的方式直接爆破该文件内容？（y/n）')
+            if sw == 'y' or sw == "Y":
+                getCrc = fz.getinfo(filename).CRC
+                print(f'[+]{filename} 文件的CRC值为：{getCrc}')
+                crack_crc(filename, getCrc, getSize)
+                key += 1
+    if key == len(fz.namelist()):
+        print(f'[*]系统检测到 {zip_file} 中的所有文件均已通过CRC32碰撞破解完成，将不再使用字典进行暴力破解！')
+        exit()
+    else:
+        pass
+
+
+def crack_crc(filename, crc, size):
+    dic = its.product(string.printable, repeat=size)
+    print(f"[+]系统开始进行CRC32暴力破解······")
+    for s in dic:
+        s = ''.join(s).encode()
+        if crc == (binascii.crc32(s)):
+            print(f'[*]恭喜您，破解成功！\n[*]{filename} 文件的内容为：' + str(s.decode()))
+            break
+
+
 if __name__ == '__main__':
     print("""                          
  ______          ____                _   [*]Hx0战队      
@@ -71,7 +103,7 @@ if __name__ == '__main__':
  / /_| | |_) | | |___| | | (_| | (__|   <  __/ |   
 /____|_| .__/___\____|_|  \__,_|\___|_|\_\___|_|   
        |_| |_____|                                 
-#Coded By Asaotomo               Update:2023.07.30
+#Coded By Asaotomo               Update:2023.09.12
         """)
     if len(sys.argv) == 1:
         print(
@@ -93,6 +125,8 @@ if __name__ == '__main__':
         except Exception as e:
             zf = zipfile.ZipFile(zip_file)
             print(f'[+]压缩包 {zip_file} 不是伪加密，准备尝试暴力破解')
+            # crc32碰撞
+            get_crc(zip_file, zf)
             # 破解加密的zip文件
             password_list = []
             if len(sys.argv) > 2:  # 检查是否指定了自定义字典文件
