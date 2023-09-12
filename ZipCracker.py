@@ -87,7 +87,7 @@ def get_crc(zip_file, fz):
 
 def crack_crc(filename, crc, size):
     dic = its.product(string.printable, repeat=size)
-    print(f"[+]系统开始进行CRC32暴力破解······")
+    print(f"[+]系统开始进行CRC32碰撞破解······")
     for s in dic:
         s = ''.join(s).encode()
         if crc == (binascii.crc32(s)):
