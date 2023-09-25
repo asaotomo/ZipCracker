@@ -69,6 +69,8 @@ def crack_password(password, stop):
 def get_crc(zip_file, fz):
     key = 0
     for filename in fz.namelist():
+        if filename.endswith('/'):  # skip directories
+            continue
         getSize = fz.getinfo(filename).file_size
         if getSize <= 6:
             sw = input(
@@ -78,7 +80,7 @@ def get_crc(zip_file, fz):
                 print(f'[+]{filename} 文件的CRC值为：{getCrc}')
                 crack_crc(filename, getCrc, getSize)
                 key += 1
-    if key == len(fz.namelist()):
+    if key >= len([name for name in fz.namelist() if not name.endswith('/')]):  # only count files, not directories
         print(f'[*]系统检测到 {zip_file} 中的所有文件均已通过CRC32碰撞破解完成，将不再使用字典进行暴力破解！')
         exit()
     else:
@@ -103,7 +105,7 @@ if __name__ == '__main__':
  / /_| | |_) | | |___| | | (_| | (__|   <  __/ |   
 /____|_| .__/___\____|_|  \__,_|\___|_|\_\___|_|   
        |_| |_____|                                 
-#Coded By Asaotomo               Update:2023.09.12
+#Coded By Asaotomo               Update:2023.09.25
         """)
     if len(sys.argv) == 1:
         print(
