@@ -45,10 +45,10 @@ python3 ZipCracker.py test03.zip
 
 **扫描关注战队公众号，获取最新动态**
 
-![image](https://github.com/asaotomo/ZipCracker/assets/67818638/76fd25ca-a098-41bc-968e-c758b2848c73)
+<img width="318" alt="image" src="https://user-images.githubusercontent.com/67818638/149507366-4ada14db-a972-4071-bbb6-197659f61ced.png">
 
 **【知识星球】福利大放送**
 
-![image](https://github.com/asaotomo/ZipCracker/assets/67818638/acb99c55-9fcb-4e1f-9258-26b313cb81e2)
+<img width="318" alt="image" src="https://github.com/asaotomo/FofaMap/assets/67818638/94612a4c-9d38-4833-9aa1-35b9bd8028d1">
 
 
