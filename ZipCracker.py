@@ -1,8 +1,9 @@
 import os
 import shutil
 import sys
-from threading import Thread
+import threading
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 import time
 import zipfile
 import binascii
@@ -155,15 +156,16 @@ if __name__ == '__main__':
             success = False
             cost_time = 0.00001
             stop = [False]  # 用列表存储 stop 变量，使其可以在多个线程间共享
-            threads = []
+
+            # 控制虚拟内存的占用
+            threading.stack_size(65536)
+            pool = ThreadPoolExecutor(1000)
+
             for password in password_list:
                 tried_passwords.append(password)
                 if not stop[0]:  # 检查 stop 变量的值，决定是否启动线程
                     start = time.time()
-                    t = Thread(target=crack_password, args=[password, stop])
-                    threads.append(t)
-                    t.start()
-            for t in threads:
-                t.join()
+                    pool.submit(crack_password, password, stop)
+
             if not success:
                 print('\n[-]非常抱歉，字典中的所有密码均已尝试，请尝试其他字典或使用更高级的破解方法！')
