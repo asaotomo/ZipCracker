@@ -49,6 +49,6 @@ python3 ZipCracker.py test03.zip
 
 **【知识星球】福利大放送**
 
-<img width="318" alt="image" src="https://github.com/asaotomo/FofaMap/assets/67818638/94612a4c-9d38-4833-9aa1-35b9bd8028d1">
+<img width="318" alt="image" src="https://github.com/asaotomo/ZipCracker/assets/67818638/659b508c-12ad-47a9-8df5-f2c36403c02b">
 
 
