@@ -143,6 +143,7 @@ if __name__ == '__main__':
                     f"[*]压缩包 {zip_file} 为伪加密，系统已为您生成修复后的压缩包({fix_zip_name})，并自动提取出{len(filenames)}个文件：{filenames}")
                 os._exit(0)
             except Exception as e:
+                os.remove(zip_file + ".tmp")
                 zf = zipfile.ZipFile(zip_file)
                 print(f'[+]压缩包 {zip_file} 不是伪加密，准备尝试暴力破解')
                 # crc32碰撞
@@ -179,7 +180,6 @@ if __name__ == '__main__':
                 start_time = time.time()
                 display_thread = threading.Thread(target=display_progress, args=(status, total_passwords, start_time))
                 display_thread.start()
-
                 max_threads = adjust_thread_count()
                 print(f"[+]动态调整线程数为：{max_threads}个")
 
@@ -198,5 +198,7 @@ if __name__ == '__main__':
 
                 if not success:
                     print('\n[-]非常抱歉，字典中的所有密码均已尝试，请尝试其他字典或使用更高级的破解方法！')
+        else:
+            print(f'[!]系统检测到 {zip_file} 不是一个加密的ZIP文件，您可以直接解压！')
     except Exception as e:
         print(f'[!]发生错误：{e}')
