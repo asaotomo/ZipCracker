@@ -19,26 +19,30 @@ ZipCracker is a high-performance multi-threaded cracking tool developed by the H
 #### 1. Pseudo-Encryption Identification and Repair
 
 ```
-python3 ZipCracker.py test01.zip  
+python3 ZipCracker_en.py test01.zip  
 ```
 
-![image](https://github.com/asaotomo/ZipCracker/assets/67818638/88fd42b5-7b89-452d-a640-77326dc05b4c)
+<img width="1240" alt="image" src="https://github.com/user-attachments/assets/b6e2b0ea-9c93-42b4-acf3-888909d7365b">
+
 
 #### 2. Brute Force Cracking - Built-in Dictionary
 
 ```
-python3 ZipCracker.py test02.zip  
+python3 ZipCracker_en.py test02.zip  
 ```
 
-![image](https://github.com/asaotomo/ZipCracker/assets/67818638/bcfdc434-3eb2-426f-8f83-7951c9af4b59)
+<img width="1240" alt="image" src="https://github.com/user-attachments/assets/fb00a9a8-a197-4df6-bac6-89868862135f">
+
 
 #### 3. Brute Force Cracking - Custom Dictionary
 
 ```
-python3 ZipCracker.py test02.zip MyDict.txt  
+python3 ZipCracker_en.py test02.zip MyDict.txt  
 ```
 
-![image](https://github.com/asaotomo/ZipCracker/assets/67818638/c11fd091-b4a5-4b5f-ab39-8489604cf57d)
+<img width="1240" alt="image" src="https://github.com/user-attachments/assets/4db49d4c-1d82-4461-91b5-cbbc2e0a1d53">
+
+
 
 #### 4. Brute Force Cracking - CRC32 Collision
 
@@ -46,7 +50,7 @@ python3 ZipCracker.py test02.zip MyDict.txt
 python3 ZipCracker.py test03.zip  
 ```
 
-![image](https://github.com/asaotomo/ZipCracker/assets/67818638/db48ca5c-3c24-44a6-8a79-0398b1b56222)
+<img width="1240" alt="image" src="https://github.com/user-attachments/assets/6ce39b87-a603-441e-8af5-ee993b567bce">
 
 ------
 
@@ -56,8 +60,8 @@ This tool is provided for security testers for self-assessment purposes only. Th
 
 **Scan and follow the team's official account for the latest updates.**
 
-![image](https://user-images.githubusercontent.com/67818638/149507366-4ada14db-a972-4071-bbb6-197659f61ced.png)
+<img width="318" alt="image" src="https://user-images.githubusercontent.com/67818638/149507366-4ada14db-a972-4071-bbb6-197659f61ced.png">
 
 **【Knowledge Planet】Big Giveaway**
 
-![image](https://github.com/asaotomo/ZipCracker/assets/67818638/659b508c-12ad-47a9-8df5-f2c36403c02b)
+<img width="318" alt="image" src="https://github.com/asaotomo/ZipCracker/assets/67818638/659b508c-12ad-47a9-8df5-f2c36403c02b">
