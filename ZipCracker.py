@@ -9,7 +9,7 @@ import zipfile
 import binascii
 import string
 import itertools as its
-import psutil
+import multiprocessing
 
 
 def is_zip_encrypted(file_path):
@@ -110,7 +110,7 @@ def display_progress(status, total_passwords, start_time):
 
 
 def adjust_thread_count():
-    cpu_count = psutil.cpu_count(logical=True)
+    cpu_count = multiprocessing.cpu_count()
     return cpu_count * 2  # 使用逻辑CPU数量的两倍作为线程数
 
 
