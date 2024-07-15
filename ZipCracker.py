@@ -123,7 +123,7 @@ if __name__ == '__main__':
      / /_| | |_) | | |___| | | (_| | (__|   <  __/ |   
     /____|_| .__/___\____|_|  \__,_|\___|_|\_\___|_|   
            |_| |_____|                                 
-    #Coded By Asaotomo               Update:2024.06.13
+    #Coded By Asaotomo               Update:2024.07.15
             """)
         if len(sys.argv) == 1:
             print(
