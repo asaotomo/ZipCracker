@@ -33,7 +33,7 @@ def fix_zip_encrypted(file_path):
             if info.flag_bits & 0x1:
                 info.flag_bits ^= 0x1  # 清除加密标记
             temp_zf.writestr(info, zf.read(info.filename))
-    fix_zip_name = "fix_" + file_path
+    fix_zip_name = os.path.join(os.path.dirname(file_path), "fix_" + os.path.basename(file_path)) 
     try:
         shutil.move(temp_path, fix_zip_name)
     except:
@@ -123,7 +123,7 @@ if __name__ == '__main__':
      / /_| | |_) | | |___| | | (_| | (__|   <  __/ |   
     /____|_| .__/___\____|_|  \__,_|\___|_|\_\___|_|   
            |_| |_____|                                 
-    #Coded By Asaotomo               Update:2024.07.15
+    #Coded By Asaotomo               Update:2024.09.05
             """)
         if len(sys.argv) == 1:
             print(
@@ -134,13 +134,13 @@ if __name__ == '__main__':
             print(f'[!]系统检测到 {zip_file} 是一个加密的ZIP文件')
             zf = zipfile.ZipFile(zip_file)
             try:
-                fix_zip_name = fix_zip_encrypted(zip_file)
-                zf = zipfile.ZipFile(fix_zip_name)
+                fixed_zip_name = fix_zip_encrypted(zip_file)
+                zf = zipfile.ZipFile(fixed_zip_name)
                 zf.testzip()
-                zf.extractall()
+                zf.extractall(path=os.path.dirname(fixed_zip_name))
                 filenames = zf.namelist()
                 print(
-                    f"[*]压缩包 {zip_file} 为伪加密，系统已为您生成修复后的压缩包({fix_zip_name})，并自动提取出{len(filenames)}个文件：{filenames}")
+                    f"[*]压缩包 {zip_file} 为伪加密，系统已为您生成修复后的压缩包({fixed_zip_name})，并自动提取出{len(filenames)}个文件：{filenames}")
                 os._exit(0)
             except Exception as e:
                 os.remove(zip_file + ".tmp")
