@@ -31,15 +31,15 @@ def fix_zip_encrypted(file_path):
     with zipfile.ZipFile(file_path) as zf, zipfile.ZipFile(temp_path, "w") as temp_zf:
         for info in zf.infolist():
             if info.flag_bits & 0x1:
-                info.flag_bits ^= 0x1  # Clear the encryption flag
+                info.flag_bits ^= 0x1  # 清除加密标记
             temp_zf.writestr(info, zf.read(info.filename))
-    fixed_zip_name = "fixed_" + file_path
+    fix_zip_name = os.path.join(os.path.dirname(file_path), "fix_" + os.path.basename(file_path)) 
     try:
-        shutil.move(temp_path, fixed_zip_name)
+        shutil.move(temp_path, fix_zip_name)
     except:
-        os.remove(fixed_zip_name)
-        shutil.move(temp_path, fixed_zip_name)
-    return fixed_zip_name
+        os.remove(fix_zip_name)
+        shutil.move(temp_path, fix_zip_name)
+    return fix_zip_name
 
 
 def crack_password(zip_file, password, status):
@@ -127,7 +127,7 @@ if __name__ == '__main__':
      / /_| | |_) | | |___| | | (_| | (__|   <  __/ |   
     /____|_| .__/___\____|_|  \__,_|\___|_|\_\___|_|   
            |_| |_____|                                 
-    #Coded By Asaotomo               Update:2024.07.15
+    #Coded By Asaotomo               Update:2024.09.05
             """)
         if len(sys.argv) == 1:
             print(
@@ -140,9 +140,10 @@ if __name__ == '__main__':
             zf = zipfile.ZipFile(zip_file)
             try:
                 fixed_zip_name = fix_zip_encrypted(zip_file)
+                print(fixed_zip_name)
                 zf = zipfile.ZipFile(fixed_zip_name)
                 zf.testzip()
-                zf.extractall()
+                zf.extractall(path=os.path.dirname(fixed_zip_name))
                 filenames = zf.namelist()
                 print(
                     f"[*]The archive {zip_file} has false encryption, the system has generated a repaired archive "
