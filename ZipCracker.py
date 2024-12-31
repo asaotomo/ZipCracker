@@ -109,9 +109,11 @@ def display_progress(status, total_passwords, start_time):
                 end="", flush=True)
 
 
-def adjust_thread_count():
-    cpu_count = multiprocessing.cpu_count()
-    return cpu_count * 2  # 使用逻辑CPU数量的两倍作为线程数
+def adjust_thread_count(max_limit=128):  
+    cpu_count = multiprocessing.cpu_count()  
+    # 使用逻辑CPU数的4倍作为线程数，但不超过最大限制  
+    max_threads = min(max_limit, cpu_count * 4)  
+    return max_threads  
 
 
 if __name__ == '__main__':
@@ -123,7 +125,7 @@ if __name__ == '__main__':
      / /_| | |_) | | |___| | | (_| | (__|   <  __/ |   
     /____|_| .__/___\____|_|  \__,_|\___|_|\_\___|_|   
            |_| |_____|                                 
-    #Coded By Asaotomo               Update:2024.09.05
+    #Coded By Asaotomo               Update:2024.12.31
             """)
         if len(sys.argv) == 1:
             print(
