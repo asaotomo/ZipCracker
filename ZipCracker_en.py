@@ -113,9 +113,11 @@ def display_progress(status, total_passwords, start_time):
                 end="", flush=True)
 
 
-def adjust_thread_count():
-    cpu_count = multiprocessing.cpu_count()
-    return cpu_count * 2  # Use twice the number of logical CPUs as thread count
+def adjust_thread_count(max_limit=128):  
+    cpu_count = multiprocessing.cpu_count()  
+    # Use 4 times the number of logical CPUs as the thread count, but do not exceed the maximum limit  
+    max_threads = min(max_limit, cpu_count * 4)  
+    return max_threads
 
 
 if __name__ == '__main__':
@@ -127,7 +129,7 @@ if __name__ == '__main__':
      / /_| | |_) | | |___| | | (_| | (__|   <  __/ |   
     /____|_| .__/___\____|_|  \__,_|\___|_|\_\___|_|   
            |_| |_____|                                 
-    #Coded By Asaotomo               Update:2024.09.05
+    #Coded By Asaotomo               Update:2024.12.31
             """)
         if len(sys.argv) == 1:
             print(
