@@ -230,7 +230,7 @@ if __name__ == '__main__':
             """)
         if len(sys.argv) == 1:
             print(
-                "[*]用法1(内置字典):Python3 Hx0_Zip_Cracker.py YourZipFile.zip \n[*]用法2(自定义字典):Python3 Hx0_Zip_Cracker.py  YourZipFile.zip  YourDict.txt")
+                "[*]用法1(内置字典):Python3 ZipCracker.py YourZipFile.zip \n[*]用法2(自定义字典):Python3 ZipCracker.py  YourZipFile.zip  YourDict.txt")
             os._exit(0)
         zip_file = sys.argv[1]
         if is_zip_encrypted(zip_file):
