@@ -4,13 +4,15 @@
 
 [中文](./README.md)
 
-ZipCracker is a high-performance multi-threaded cracking tool developed by the Hx0 team, designed specifically for breaking password-protected Zip files. It uses CRC32 collision and dictionary attack methods to guess the plaintext or password of Zip files and successfully extract their contents. This tool has the ability to identify "pseudo-encrypted" Zip files and can automatically repair them, making it particularly suitable for use in CTF competitions.
+***ZipCracker is a high-performance multi-threaded cracking tool developed by the Hx0 team, designed specifically for breaking password-protected Zip files. It uses CRC32 collision and dictionary attack methods to guess the plaintext or password of Zip files and successfully extract their contents. This tool has the ability to identify "pseudo-encrypted" Zip files and can automatically repair them, making it particularly suitable for use in CTF competitions.***
 
 **Note:**
 
-1. The program automatically checks the file size in encrypted compressed files. If it is less than 6 bytes, it will prompt the user whether to use CRC32 for hash collision.
-2. The program includes 6000 common cracking dictionaries and generates pure numeric dictionaries from 0 to 6 digits.
-3. The program automatically adjusts the number of threads based on the runtime environment, providing extremely fast cracking speeds.
+1.The program automatically checks the file size within encrypted archives. For files smaller than 6 bytes, the system will prompt the user to choose whether to attempt cracking via CRC32 hash collision.
+
+2.The program comes with a built-in library of 6,000 commonly used password dictionaries and automatically generates a list of passwords consisting of 0 to 6 digit numbers. Additionally, users can utilize their own custom dictionaries, and the program can efficiently handle even those containing tens of millions of entries.
+
+3.The program can automatically adjust the optimal number of threads based on the runtime environment, ensuring that the cracking process is both fast and stable.
 
 ### Usage
 
