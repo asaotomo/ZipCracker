@@ -10,7 +10,7 @@
 
 1.The program automatically checks the file size within encrypted archives. For files smaller than 6 bytes, the system will prompt the user to choose whether to attempt cracking via CRC32 hash collision.
 
-2.The program comes with a built-in library of 6,000 commonly used password dictionaries and automatically generates a list of passwords consisting of 0 to 6 digit numbers. Additionally, users can utilize their own custom dictionaries, and the program can efficiently handle even those containing tens of millions of entries.
+2.The program includes a built-in dictionary of 6,000 common passwords and automatically generates a list of numeric passwords ranging from 0 to 6 digits. Additionally, users can utilize their own custom dictionaries, and the program can efficiently handle even large dictionaries containing hundreds of millions of entries.
 
 3.The program can automatically adjust the optimal number of threads based on the runtime environment, ensuring that the cracking process is both fast and stable.
 
