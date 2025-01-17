@@ -150,7 +150,7 @@ def count_passwords(file_path):
     统计字典文件中的总密码数量
     """
     try:
-        with open(file_path, 'r') as f:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             return sum(1 for _ in f)
     except Exception as e:
         print(f"[!]加载字典文件失败，原因：{e}")
@@ -162,7 +162,7 @@ def load_passwords_in_chunks(file_path, chunk_size=1000000):
     分块加载密码
     """
     try:
-        with open(file_path, 'r') as f:
+        with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             chunk = []
             for line in f:
                 chunk.append(line.strip())
@@ -226,7 +226,7 @@ if __name__ == '__main__':
      / /_| | |_) | | |___| | | (_| | (__|   <  __/ |   
     /____|_| .__/___\____|_|  \__,_|\___|_|\_\___|_|   
            |_| |_____|                                 
-    #Coded By Asaotomo               Update:2025.01.05
+    #Coded By Asaotomo               Update:2025.01.17
             """)
         if len(sys.argv) == 1:
             print(
