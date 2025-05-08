@@ -176,11 +176,35 @@ def load_passwords_in_chunks(file_path, chunk_size=1000000):
         print(f"[!] Failed to load dictionary file, reason: {e}")
         exit(0)
 
+def crack_password_with_file_or_dir(zip_file, dict_file_or_dir, status):
+    if os.path.isdir(dict_file_or_dir):
+        for filename in os.listdir(dict_file_or_dir):
+            file_path = os.path.join(dict_file_or_dir, filename)
+            if os.path.isfile(file_path):
+                crack_password_with_chunks(zip_file, file_path, status)
+            else:
+                crack_password_with_file_or_dir(zip_file, file_path, status)
+    else:
+        crack_password_with_chunks(zip_file, dict_file_or_dir, status)
 
-def crack_password_with_chunks(zip_file, numeric_dict, dict_file, status):
+
+def crack_password_with_chunks(zip_file, dict_file, status):
     """
     Perform brute force attack using dictionary loaded in chunks.
     """
+
+    if dict_file == 'password_list.txt':
+        print(f'[+] Loaded 0-6 digit numeric dictionary successfully!')
+        numeric_dict, numeric_dict_num = generate_numeric_dict()
+    else:
+        numeric_dict = []
+        numeric_dict_num = 0
+
+    total_passwords = count_passwords(dict_file) + numeric_dict_num  # Count total passwords
+    print(f"\n[+] Loaded {dict_type}[{dict_file}] successfully!")
+    print(f"[+] Total number of passwords in the current dictionary: {total_passwords}")
+    status["total_passwords"] = total_passwords
+
     success = False
     start_time = time.time()
 
@@ -231,7 +255,7 @@ if __name__ == '__main__':
             """)
         if len(sys.argv) == 1:
             print(
-                "[*] Usage 1 (built-in dictionary): Python3 ZipCracker_en.py YourZipFile.zip\n[*] Usage 2 (custom dictionary): Python3 ZipCracker_en.py YourZipFile.zip YourDict.txt")
+                "[*] Usage 1 (built-in dictionary): Python3 ZipCracker_en.py YourZipFile.zip\n[*] Usage 2 (custom dictionary): Python3 ZipCracker_en.py YourZipFile.zip YourDict.txt\n[*] Usage 3 (custom dictionary with directory): Python3 ZipCracker_en.py YourZipFile.zip YourDictDirectory")
             os._exit(0)
         zip_file = sys.argv[1]
         if is_zip_encrypted(zip_file):
@@ -255,26 +279,19 @@ if __name__ == '__main__':
                     if len(sys.argv) > 2:  # Check if a custom dictionary file is specified
                         dict_file = sys.argv[2]
                         dict_type = "Custom Dictionary"
-                        numeric_dict_num = 0
-                        numeric_dict = []
                     else:
                         dict_file = 'password_list.txt'
                         dict_type = "Built-in Dictionary"
-                        print(f'[+] Loaded 0-6 digit numeric dictionary successfully!')
-                        numeric_dict, numeric_dict_num = generate_numeric_dict()
-                    total_passwords = count_passwords(dict_file) + numeric_dict_num  # Count total passwords
-                    print(f"[+] Loaded {dict_type}[{dict_file}] successfully!")
-                    print(f"[+] Total number of passwords in the current dictionary: {total_passwords}")
 
                     status = {
                         "stop": False,
                         "tried_passwords": [],
                         "lock": threading.Lock(),
-                        "total_passwords": total_passwords  # Initialize total password count
+                        "total_passwords": 0  # Initialize total password count
                     }
 
                     print(f"[+] Starting brute force attack...")
-                    crack_password_with_chunks(zip_file, numeric_dict, dict_file, status)
+                    crack_password_with_file_or_dir(zip_file, dict_file, status)
         else:
             print(f'[!] Detected that {zip_file} is not an encrypted ZIP file, you can unzip it directly!')
     except Exception as e:

@@ -176,10 +176,35 @@ def load_passwords_in_chunks(file_path, chunk_size=1000000):
         exit(0)
 
 
-def crack_password_with_chunks(zip_file, numeric_dict, dict_file, status):
+def crack_password_with_file_or_dir(zip_file, dict_file_or_dir, status):
+    if os.path.isdir(dict_file_or_dir):
+        for filename in os.listdir(dict_file_or_dir):
+            file_path = os.path.join(dict_file_or_dir, filename)
+            if os.path.isfile(file_path):
+                crack_password_with_chunks(zip_file, file_path, status)
+            else:
+                crack_password_with_file_or_dir(zip_file, file_path, status)
+    else:
+        crack_password_with_chunks(zip_file, dict_file_or_dir, status)
+
+
+def crack_password_with_chunks(zip_file, dict_file, status):
     """
     使用分块加载字典进行暴力破解
     """
+
+    if dict_file == 'password_list.txt':
+        print(f'[+]加载0-6位纯数字字典成功！')
+        numeric_dict, numeric_dict_num = generate_numeric_dict()
+    else:
+        numeric_dict = []
+        numeric_dict_num = 0
+
+    total_passwords = count_passwords(dict_file) + numeric_dict_num  # 初始化总密码数
+    print(f"[+]加载[{dict_file}]成功！")
+    print(f"[+]当前爆破字典总数:{total_passwords}个")
+    status["total_passwords"] = total_passwords
+
     success = False
     start_time = time.time()
 
@@ -230,7 +255,7 @@ if __name__ == '__main__':
             """)
         if len(sys.argv) == 1:
             print(
-                "[*]用法1(内置字典):Python3 ZipCracker.py YourZipFile.zip \n[*]用法2(自定义字典):Python3 ZipCracker.py  YourZipFile.zip  YourDict.txt")
+                "[*]用法1(内置字典):Python3 ZipCracker.py YourZipFile.zip\n[*]用法2(自定义字典):Python3 ZipCracker.py YourZipFile.zip YourDict.txt\n[*]用法3(自定义字典目录):Python3 ZipCracker.py YourZipFile.zip YourDictDirectory")
             os._exit(0)
         zip_file = sys.argv[1]
         if is_zip_encrypted(zip_file):
@@ -255,26 +280,19 @@ if __name__ == '__main__':
                 if len(sys.argv) > 2:  # 检查是否指定了自定义字典文件
                     dict_file = sys.argv[2]
                     dict_type = "用户自定义字典"
-                    numeric_dict_num = 0
-                    numeric_dict = []
                 else:
                     dict_file = 'password_list.txt'
                     dict_type = "系统内置字典"
-                    print(f'[+]加载0-6位纯数字字典成功！')
-                    numeric_dict, numeric_dict_num = generate_numeric_dict()
-                total_passwords = count_passwords(dict_file) + numeric_dict_num  # 统计总密码数
-                print(f"[+]加载{dict_type}[{dict_file}]成功！")
-                print(f"[+]当前爆破字典总数:{total_passwords}个")
 
                 status = {
                     "stop": False,
                     "tried_passwords": [],
                     "lock": threading.Lock(),
-                    "total_passwords": total_passwords  # 初始化总密码数
+                    "total_passwords": 0  # 初始化总密码数
                 }
 
                 print(f"[+]系统开始进行暴力破解······")
-                crack_password_with_chunks(zip_file, numeric_dict, dict_file, status)
+                crack_password_with_file_or_dir(zip_file, dict_file, status)
         else:
             print(f'[!]系统检测到 {zip_file} 不是一个加密的ZIP文件，您可以直接解压！')
     except Exception as e:
