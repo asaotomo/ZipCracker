@@ -6,6 +6,8 @@
 
 ***ZipCracker is a high-performance multi-threaded cracking tool developed by the Hx0 team, designed specifically for breaking password-protected Zip files. It uses CRC32 collision and dictionary attack methods to guess the plaintext or password of Zip files and successfully extract their contents. This tool has the ability to identify "pseudo-encrypted" Zip files and can automatically repair them, making it particularly suitable for use in CTF competitions.***
 
+<img width="1510" alt="image" src="https://github.com/user-attachments/assets/c698572c-2ea5-4f22-820d-5cf512eb70ec" />
+
 **Note:**
 
 1.The program automatically checks the file size within encrypted archives. For files smaller than 6 bytes, the system will prompt the user to choose whether to attempt cracking via CRC32 hash collision.
@@ -66,4 +68,4 @@ This tool is provided for security testers for self-assessment purposes only. Th
 
 **【Knowledge Planet】Big Giveaway**
 
-<img width="318" alt="image" src="https://github.com/asaotomo/ZipCracker/assets/67818638/659b508c-12ad-47a9-8df5-f2c36403c02b">
+<img width="318" alt="image" src="https://github.com/user-attachments/assets/94849d79-bcac-4a43-9221-3e2718225cb6">
