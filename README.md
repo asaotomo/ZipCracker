@@ -4,7 +4,7 @@
 
 [English](./README_EN.md)
 
-***ZipCracker是一款由Hx0战队开发的高性能多并发破解工具，专为破解密码保护的Zip文件而设计。它采用CRC32碰撞和字典攻击方式猜测Zip文件的明文或密码，并能成功提取其中的内容。这款工具具备识别"伪加密"Zip文件的能力，并能自动进行修复。因此，它非常适合在CTF比赛中使用。***
+***ZipCracker是一款由Hx0战队开发的高性能多并发破解工具，专为破解密码保护的Zip文件而设计。它采用CRC32碰撞、字典攻击及掩码攻击等方式猜测Zip文件的明文或密码，并能成功提取其中的内容。这款工具具备识别"伪加密"Zip文件的能力，并能自动进行修复。因此，它非常适合在CTF比赛中使用。***
 
 <img width="1510" alt="image" src="https://github.com/user-attachments/assets/c698572c-2ea5-4f22-820d-5cf512eb70ec" />
 
@@ -44,6 +44,29 @@ python3 ZipCracker.py test02.zip MyDict.txt
 python3 ZipCracker.py test03.zip
 ```
 <img width="800" alt="image" src="https://github.com/asaotomo/ZipCracker/assets/67818638/db48ca5c-3c24-44a6-8a79-0398b1b56222">
+
+#### 5.暴力破解-掩码攻击
+
+当您已知密码的部分结构时（例如，公司名+年份），掩码攻击是最高效的破解方式。您可以使用特殊占位符来定义密码的格式，从而极大地缩小密码搜索范围。
+
+掩码占位符规则:
+
+| 占位符 | 代表的字符集 |
+| :--- | :----------- |
+| `?d` | 数字 (0-9) |
+| `?l` | 小写字母 (a-z) |
+| `?u` | 大写字母 (A-Z) |
+| `?s` | 特殊符号 (!@#$等) |
+| `??` | 问号 `?` 自身 |
+
+```
+python3 ZipCracker.py test04.zip -m '?uali?s?d?d?d'
+```
+
+上述命令会尝试破解密码结构为: 一个大写字母 + 'ali' + 一个特殊符号 + 三个数字 (例如 Kali@123,  Bali#756 等) 的ZIP文件。
+
+<img width="818" height="266" alt="image" src="https://github.com/user-attachments/assets/37abb6a2-6ba7-4fed-937b-e62ceab6e378" />
+
 
 ---
 
