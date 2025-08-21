@@ -4,7 +4,7 @@
 
 [中文](./README.md)
 
-***ZipCracker is a high-performance multi-threaded cracking tool developed by the Hx0 team, designed specifically for breaking password-protected Zip files. It uses CRC32 collision and dictionary attack methods to guess the plaintext or password of Zip files and successfully extract their contents. This tool has the ability to identify "pseudo-encrypted" Zip files and can automatically repair them, making it particularly suitable for use in CTF competitions.***
+***ZipCracker is a high-performance, multi-threaded cracking tool developed by Team Hx0, designed specifically for cracking password-protected Zip files. It uses methods such as CRC32 collision, dictionary attacks, and mask attacks to guess the plaintext or password of a Zip file and successfully extract its contents. This tool can also identify and automatically repair "pseudo-encrypted" Zip files, making it highly suitable for use in CTF competitions.***
 
 <img width="1510" alt="image" src="https://github.com/user-attachments/assets/c698572c-2ea5-4f22-820d-5cf512eb70ec" />
 
@@ -55,6 +55,28 @@ python3 ZipCracker.py test03.zip
 ```
 
 <img width="1240" alt="image" src="https://github.com/user-attachments/assets/6ce39b87-a603-441e-8af5-ee993b567bce">
+
+#### 5. Brute-force - Mask Attack
+When you know the partial structure of the password (e.g., company name + year), a mask attack is the most efficient method. You can use special placeholders to define the password's format, significantly narrowing the search space.
+
+Mask Placeholder Rules:
+
+| Placeholder | Character Set Represented |
+| :--- | :----------- |
+| `?d` | Digits (0-9) |
+| `?l` | Lowercase Letters (a-z) |
+| `?u` | Uppercase Letters (A-Z) |
+| `?s` | Special Symbols (!@#$etc.) |
+| `??` | The `?` character itself |
+
+```
+python3 ZipCracker.py test04.zip -m '?uali?s?d?d?d'
+```
+
+The command above will attempt to crack a password with the structure: an uppercase letter + 'ali' + a special symbol + three digits (e.g., Kali@123, Bali#756, etc.).
+
+<img width="743" height="267" alt="image" src="https://github.com/user-attachments/assets/060265e3-fe54-47cb-99f3-43b6dcf41409" />
+
 
 ------
 
