@@ -56,7 +56,7 @@ python3 ZipCracker.py test03.zip
 
 <img width="1240" alt="image" src="https://github.com/user-attachments/assets/6ce39b87-a603-441e-8af5-ee993b567bce">
 
-#### 5. Brute-force - Mask Attack
+#### 5. Brute Force Cracking - Mask Attack
 When you know the partial structure of the password (e.g., company name + year), a mask attack is the most efficient method. You can use special placeholders to define the password's format, significantly narrowing the search space.
 
 Mask Placeholder Rules:
