@@ -11,6 +11,13 @@ import itertools as its
 import multiprocessing
 
 
+# --- Definitions for the new Mask Attack feature ---
+CHARSET_DIGITS = string.digits
+CHARSET_LOWER = string.ascii_lowercase
+CHARSET_UPPER = string.ascii_uppercase
+CHARSET_SYMBOLS = string.punctuation
+# ----------------------------------------------------
+
 def is_zip_encrypted(file_path):
     """
     Check if the zip file has fake encryption.
@@ -176,38 +183,62 @@ def load_passwords_in_chunks(file_path, chunk_size=1000000):
         print(f"[!] Failed to load dictionary file, reason: {e}")
         exit(0)
 
-def crack_password_with_file_or_dir(zip_file, dict_file_or_dir, status):
-    if os.path.isdir(dict_file_or_dir):
-        for filename in os.listdir(dict_file_or_dir):
-            file_path = os.path.join(dict_file_or_dir, filename)
-            if os.path.isfile(file_path):
-                crack_password_with_chunks(zip_file, file_path, status)
-            else:
-                crack_password_with_file_or_dir(zip_file, file_path, status)
-    else:
-        crack_password_with_chunks(zip_file, dict_file_or_dir, status)
+# --- New Feature: Mask Attack ---
 
-
-def crack_password_with_chunks(zip_file, dict_file, status):
+def parse_mask(mask):
     """
-    Perform brute force attack using dictionary loaded in chunks.
+    Parse the mask string, return a list of charsets and the total number of combinations.
     """
+    charsets = []
+    total_combinations = 1
+    i = 0
+    while i < len(mask):
+        if mask[i] == '?':
+            if i + 1 < len(mask):
+                placeholder = mask[i+1]
+                if placeholder == 'd':
+                    charsets.append(CHARSET_DIGITS)
+                    total_combinations *= len(CHARSET_DIGITS)
+                elif placeholder == 'l':
+                    charsets.append(CHARSET_LOWER)
+                    total_combinations *= len(CHARSET_LOWER)
+                elif placeholder == 'u':
+                    charsets.append(CHARSET_UPPER)
+                    total_combinations *= len(CHARSET_UPPER)
+                elif placeholder == 's':
+                    charsets.append(CHARSET_SYMBOLS)
+                    total_combinations *= len(CHARSET_SYMBOLS)
+                elif placeholder == '?':
+                    charsets.append('?') # Represents a literal question mark
+                else:
+                    # Unknown placeholder, treat as a literal string
+                    charsets.append(mask[i:i+2])
+                i += 2
+            else: # Trailing '?'
+                charsets.append('?')
+                i += 1
+        else:
+            charsets.append(mask[i])
+            i += 1
+    return charsets, total_combinations
 
-    if dict_file == 'password_list.txt':
-        print(f'[+] Loaded 0-6 digit numeric dictionary successfully!')
-        numeric_dict, numeric_dict_num = generate_numeric_dict()
-    else:
-        numeric_dict = []
-        numeric_dict_num = 0
 
-    total_passwords = count_passwords(dict_file) + numeric_dict_num  # Count total passwords
-    print(f"\n[+] Loaded {dict_type}[{dict_file}] successfully!")
-    print(f"[+] Total number of passwords in the current dictionary: {total_passwords}")
+def crack_password_with_mask(zip_file, mask, status):
+    """
+    Perform brute-force attack using a mask.
+    """
+    charsets, total_passwords = parse_mask(mask)
+    if total_passwords > 100_000_000_000: # Warn the user if combinations exceed 100 billion
+        choice = input(f"[!] Warning: The mask '{mask}' generates {total_passwords:,} combinations, which may take a very long time. Continue? (y/n): ")
+        if choice.lower() != 'y':
+            print("[-] Attack aborted by user.")
+            return
+
+    print(f"\n[+] Starting mask attack with '{mask}'.")
+    print(f"[+] Total password combinations to try: {total_passwords:,}")
     status["total_passwords"] = total_passwords
 
-    success = False
     start_time = time.time()
-
     max_threads = adjust_thread_count()
     print(f"[+] Adjusted thread count to: {max_threads}")
 
@@ -216,30 +247,93 @@ def crack_password_with_chunks(zip_file, dict_file, status):
 
     try:
         with ThreadPoolExecutor(max_workers=max_threads) as executor:
-            for chunk in load_passwords_in_chunks(dict_file):
-                future_to_password = {executor.submit(crack_password, zip_file, password, status): password for password
-                                      in chunk}
-                for future in as_completed(future_to_password):
-                    if future.result():
-                        success = True
-                        status["stop"] = True
-                        break
-                if success:
+            # Create a password generator to avoid loading all combinations into memory at once
+            password_generator = (''.join(p) for p in its.product(*charsets))
+            
+            # Get passwords in chunks from the generator and submit them to the thread pool
+            while not status["stop"]:
+                chunk = list(its.islice(password_generator, 100000)) # Process 100,000 passwords at a time
+                if not chunk: # Generator is exhausted
                     break
-            if numeric_dict != []:
-                future_to_password = {executor.submit(crack_password, zip_file, password, status): password for password
-                                      in numeric_dict}
+                
+                future_to_password = {executor.submit(crack_password, zip_file, password, status): password for password in chunk}
                 for future in as_completed(future_to_password):
-                    if future.result():
-                        success = True
+                    if future.result() or status["stop"]:
+                        status["stop"] = True
+                        break # Inner loop
+                if status["stop"]:
+                    break # Outer loop
+
+    finally:
+        status["stop"] = True
+        display_thread.join()
+
+    if "Success!" not in status:
+         print('\n[-] Sorry, all passwords generated by the mask have been tried. Please check your mask or try other methods!')
+
+# --- Dictionary attack functions modified for the new main logic ---
+
+def crack_password_with_file_or_dir(zip_file, dict_file_or_dir, status):
+    if os.path.isdir(dict_file_or_dir):
+        for filename in sorted(os.listdir(dict_file_or_dir)): # Sort by filename
+            file_path = os.path.join(dict_file_or_dir, filename)
+            if os.path.isfile(file_path):
+                crack_password_with_chunks(zip_file, file_path, status, "Custom Dictionary")
+            else:
+                crack_password_with_file_or_dir(zip_file, file_path, status)
+    else:
+        crack_password_with_chunks(zip_file, dict_file_or_dir, status, "Custom Dictionary")
+
+
+def crack_password_with_chunks(zip_file, dict_file, status, dict_type):
+    """
+    Perform brute force attack using dictionary loaded in chunks.
+    """
+    numeric_dict_num = 0
+    if dict_file == 'password_list.txt':
+        numeric_dict_num = len(generate_numeric_dict()[0])
+        total_passwords = numeric_dict_num
+        print(f'[+] Loaded 0-6 digit numeric dictionary successfully! Total passwords: {total_passwords}')
+    else:
+        total_passwords = count_passwords(dict_file)
+        print(f"\n[+] Loaded {dict_type}[{dict_file}] successfully!")
+        print(f"[+] Total number of passwords in the current dictionary: {total_passwords}")
+    
+    status["total_passwords"] += total_passwords
+
+    start_time = time.time()
+    max_threads = adjust_thread_count()
+    print(f"[+] Adjusted thread count to: {max_threads}")
+
+    display_thread = threading.Thread(target=display_progress, args=(status, start_time))
+    display_thread.start()
+
+    try:
+        with ThreadPoolExecutor(max_workers=max_threads) as executor:
+            # Process the dictionary file
+            if dict_file != 'password_list.txt':
+                for chunk in load_passwords_in_chunks(dict_file):
+                    if status["stop"]: break
+                    future_to_password = {executor.submit(crack_password, zip_file, password, status): password for password in chunk}
+                    for future in as_completed(future_to_password):
+                        if future.result() or status["stop"]:
+                            status["stop"] = True
+                            break
+            
+            # Process the built-in numeric dictionary
+            if not status["stop"] and dict_file == 'password_list.txt':
+                numeric_dict, _ = generate_numeric_dict()
+                future_to_password = {executor.submit(crack_password, zip_file, password, status): password for password in numeric_dict}
+                for future in as_completed(future_to_password):
+                    if future.result() or status["stop"]:
                         status["stop"] = True
                         break
     finally:
         status["stop"] = True
         display_thread.join()
 
-    if not success:
-        print('\n[-] Sorry, all passwords in the dictionary have been tried. Please use another dictionary or advanced cracking methods!')
+    if "Success!" not in status:
+        print('\n[-] Sorry, all passwords in the dictionary have been tried.')
 
 
 if __name__ == '__main__':
@@ -251,48 +345,76 @@ if __name__ == '__main__':
      / /_| | |_) | | |___| | | (_| | (__|   <  __/ |   
     /____|_| .__/___\____|_|  \__,_|\___|_|\_\___|_|   
            |_| |_____|                                 
-    #Coded By Asaotomo               Update:2025.01.17
+    #Coded By Asaotomo               Update:2025.08.21
             """)
-        if len(sys.argv) == 1:
-            print(
-                "[*] Usage 1 (built-in dictionary): Python3 ZipCracker_en.py YourZipFile.zip\n[*] Usage 2 (custom dictionary): Python3 ZipCracker_en.py YourZipFile.zip YourDict.txt\n[*] Usage 3 (custom dictionary with directory): Python3 ZipCracker_en.py YourZipFile.zip YourDictDirectory")
+        
+        # --- Modified main logic to differentiate between attack modes ---
+        if len(sys.argv) < 2:
+            print("\n[*] --- Dictionary Attack ---")
+            print("[*] Usage 1 (built-in dict): python3 ZipCracker_en.py YourZipFile.zip")
+            print("[*] Usage 2 (custom dict):   python3 ZipCracker_en.py YourZipFile.zip YourDict.txt")
+            print("[*] Usage 3 (dict folder):   python3 ZipCracker_en.py YourZipFile.zip YourDictDirectory")
+            print("\n[*] --- Mask Attack ---")
+            print("[*] Usage 4 (mask):          python3 ZipCracker_en.py YourZipFile.zip -m 'your?dmask?l'")
+            print("[*]   ?d: digit, ?l: lower, ?u: upper, ?s: symbol, ??: literal '?'")
             os._exit(0)
+
         zip_file = sys.argv[1]
+        if not os.path.exists(zip_file):
+            print(f"[!] Error: Zip file '{zip_file}' not found.")
+            os._exit(1)
+
         if is_zip_encrypted(zip_file):
             print(f'[!] Detected that {zip_file} is an encrypted ZIP file.')
-            with zipfile.ZipFile(zip_file) as zf:
-                try:
+            try:
+                with zipfile.ZipFile(zip_file) as zf:
+                    # First, try to fix fake encryption
                     fixed_zip_name = fix_zip_encrypted(zip_file)
-                    with zipfile.ZipFile(fixed_zip_name) as fixed_zf:
-                        fixed_zf.testzip()
-                        fixed_zf.extractall(path=os.path.dirname(fixed_zip_name))
-                        filenames = fixed_zf.namelist()
-                        print(
-                            f"[*] The archive {zip_file} had fake encryption. A fixed archive ({fixed_zip_name}) has been generated and {len(filenames)} files extracted.")
-                        os._exit(0)
-                except Exception as e:
-                    os.remove(zip_file + ".tmp")
-                    print(f'[+] Archive {zip_file} is not falsely encrypted, preparing to perform a brute force attack.')
-                    # crc32 collision
+                    try:
+                        with zipfile.ZipFile(fixed_zip_name) as fixed_zf:
+                            fixed_zf.testzip()
+                            fixed_zf.extractall(path=os.path.dirname(fixed_zip_name))
+                            filenames = fixed_zf.namelist()
+                            print(f"[*] The archive {zip_file} had fake encryption. A fixed archive ({fixed_zip_name}) has been generated and {len(filenames)} files extracted.")
+                            os.remove(fixed_zip_name) # Clean up the fixed file
+                            os._exit(0)
+                    except Exception:
+                        os.remove(fixed_zip_name) # Fix failed, clean up the temp file
+                        print(f'[+] Archive {zip_file} is not falsely encrypted, preparing for brute force attack.')
+                        get_crc(zip_file, zf) # Perform CRC32 collision check
+            except Exception as e:
+                print(f'[+] Archive {zip_file} is not falsely encrypted, preparing for brute force attack.')
+                with zipfile.ZipFile(zip_file) as zf:
                     get_crc(zip_file, zf)
-                    # Crack the encrypted zip file
-                    if len(sys.argv) > 2:  # Check if a custom dictionary file is specified
-                        dict_file = sys.argv[2]
-                        dict_type = "Custom Dictionary"
-                    else:
-                        dict_file = 'password_list.txt'
-                        dict_type = "Built-in Dictionary"
 
-                    status = {
-                        "stop": False,
-                        "tried_passwords": [],
-                        "lock": threading.Lock(),
-                        "total_passwords": 0  # Initialize total password count
-                    }
+            # Initialize the shared status dictionary
+            status = {
+                "stop": False,
+                "tried_passwords": [],
+                "lock": threading.Lock(),
+                "total_passwords": 0
+            }
 
-                    print(f"[+] Starting brute force attack...")
-                    crack_password_with_file_or_dir(zip_file, dict_file, status)
+            # Determine the attack mode
+            attack_mode = "dictionary"
+            if len(sys.argv) > 2 and sys.argv[2] in ['-m', '--mask']:
+                attack_mode = "mask"
+
+            if attack_mode == "mask":
+                if len(sys.argv) < 4:
+                    print("[!] Error: Mask string not provided after -m flag.")
+                    os._exit(1)
+                mask = sys.argv[3]
+                crack_password_with_mask(zip_file, mask, status)
+            else: # Default to dictionary attack
+                if len(sys.argv) > 2:
+                    dict_path = sys.argv[2]
+                    crack_password_with_file_or_dir(zip_file, dict_path, status)
+                else: # Use the built-in dictionary
+                    crack_password_with_chunks(zip_file, 'password_list.txt', status, "Built-in Dictionary")
         else:
             print(f'[!] Detected that {zip_file} is not an encrypted ZIP file, you can unzip it directly!')
+    except FileNotFoundError:
+        print(f"[!] Error: The file '{sys.argv[1]}' was not found.")
     except Exception as e:
-        print(f'[!] An error occurred: {e}')
+        print(f'\n[!] An error occurred: {e}')
