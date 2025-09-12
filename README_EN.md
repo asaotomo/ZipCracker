@@ -16,6 +16,8 @@
 
 3.The program can automatically adjust the optimal number of threads based on the runtime environment, ensuring that the cracking process is both fast and stable.
 
+4.The program not only supports attempting to decrypt compressed packages encrypted with traditional encryption algorithms but also has the capability to decrypt compressed packages encrypted with AES.
+
 ### Usage
 
 ------
