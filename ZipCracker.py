@@ -236,6 +236,7 @@ def crack_password_with_mask(zip_file, mask, status):
     print(f"\n[+]开始使用掩码 '{mask}' 进行攻击。")
     print(f"[+]需要尝试的密码总数组合为: {total_passwords:,}")
     status["total_passwords"] = total_passwords
+    status["tried_passwords"] = [] # 重置计数器
 
     start_time = time.time()
     max_threads = adjust_thread_count()
@@ -246,22 +247,20 @@ def crack_password_with_mask(zip_file, mask, status):
 
     try:
         with ThreadPoolExecutor(max_workers=max_threads) as executor:
-            # 创建一个密码生成器，避免一次性生成所有密码到内存
             password_generator = (''.join(p) for p in its.product(*charsets))
             
-            # 分块从生成器中获取密码并提交给线程池
             while not status["stop"]:
-                chunk = list(its.islice(password_generator, 100000)) # 一次处理10万个密码
-                if not chunk: # 生成器已耗尽
+                chunk = list(its.islice(password_generator, 100000))
+                if not chunk:
                     break
                 
                 future_to_password = {executor.submit(crack_password, zip_file, password, status): password for password in chunk}
                 for future in as_completed(future_to_password):
                     if future.result() or status["stop"]:
                         status["stop"] = True
-                        break # 内部循环
+                        break
                 if status["stop"]:
-                    break # 外部循环
+                    break
 
     finally:
         status["stop"] = True
@@ -273,32 +272,73 @@ def crack_password_with_mask(zip_file, mask, status):
 # --- 字典攻击相关函数 ---
 
 def crack_password_with_file_or_dir(zip_file, dict_file_or_dir, status):
+    """
+    递归地处理文件或目录中的所有字典文件
+    """
     if os.path.isdir(dict_file_or_dir):
-        for filename in sorted(os.listdir(dict_file_or_dir)): # 按文件名排序
+        # 按文件名排序，确保破解顺序可预测
+        for filename in sorted(os.listdir(dict_file_or_dir)):
+            if status["stop"]: return # 如果已经破解成功，则提前退出
             file_path = os.path.join(dict_file_or_dir, filename)
-            if os.path.isfile(file_path):
-                crack_password_with_chunks(zip_file, file_path, status, "用户自定义字典")
-            else:
-                crack_password_with_file_or_dir(zip_file, file_path, status)
-    else:
-        crack_password_with_chunks(zip_file, dict_file_or_dir, status, "用户自定义字典")
+            # 递归调用
+            crack_password_with_file_or_dir(zip_file, file_path, status)
+    elif os.path.isfile(dict_file_or_dir):
+        # 确定字典类型用于显示
+        dict_type = "用户自定义字典" if dict_file_or_dir != 'password_list.txt' else "内置字典"
+        crack_password_with_file(zip_file, dict_file_or_dir, status, dict_type)
 
 
-def crack_password_with_chunks(zip_file, dict_file, status, dict_type):
+# <<< 新增函数: 专门用于处理1-6位纯数字字典 >>>
+def crack_with_generated_numeric_dict(zip_file, status):
     """
-    使用分块加载字典进行暴力破解
+    使用生成的1-6位纯数字字典进行暴力破解
     """
-    numeric_dict_num = 0
-    if dict_file == 'password_list.txt':
-        numeric_dict_num = len(generate_numeric_dict()[0])
-        total_passwords = numeric_dict_num
-        print(f'[+]加载内置0-6位纯数字字典成功！总密码数: {total_passwords}')
-    else:
-        total_passwords = count_passwords(dict_file)
-        print(f"\n[+]加载{dict_type}[{dict_file}]成功！")
-        print(f"[+]当前字典总密码数: {total_passwords}")
+    print("\n[-]内置字典破解失败，开始尝试1-6位纯数字字典...")
+    numeric_dict, total_passwords = generate_numeric_dict()
+    print(f'[+]加载1-6位纯数字字典成功！总密码数: {total_passwords}')
     
-    status["total_passwords"] += total_passwords
+    # 重置状态以进行新一轮破解
+    status["total_passwords"] = total_passwords
+    status["tried_passwords"] = []
+    
+    start_time = time.time()
+    max_threads = adjust_thread_count()
+    print(f"[+]动态调整线程数为: {max_threads}个")
+
+    # 为新的破解阶段重启进度显示线程
+    display_thread = threading.Thread(target=display_progress, args=(status, start_time))
+    display_thread.start()
+    
+    try:
+        with ThreadPoolExecutor(max_workers=max_threads) as executor:
+            future_to_password = {executor.submit(crack_password, zip_file, password, status): password for password in numeric_dict}
+            for future in as_completed(future_to_password):
+                if future.result() or status["stop"]:
+                    status["stop"] = True
+                    break
+    finally:
+        # 确保显示线程在函数结束时停止
+        # 临时将stop设置为True，以便join可以退出
+        temp_stop = status["stop"]
+        status["stop"] = True
+        display_thread.join()
+        status["stop"] = temp_stop # 恢复状态
+
+    if not status["stop"]:
+        print('\n[-]非常抱歉，1-6位纯数字字典中的所有密码均已尝试完毕。')
+
+
+# <<< 修改后的函数: 现在只负责从单个文件中加载密码 >>>
+def crack_password_with_file(zip_file, dict_file, status, dict_type):
+    """
+    使用指定字典文件进行暴力破解
+    """
+    total_passwords = count_passwords(dict_file)
+    print(f"\n[+]加载{dict_type}[{dict_file}]成功！")
+    print(f"[+]当前字典总密码数: {total_passwords}")
+    
+    status["total_passwords"] = total_passwords
+    status["tried_passwords"] = [] # 重置密码尝试列表和总数
 
     start_time = time.time()
     max_threads = adjust_thread_count()
@@ -309,30 +349,25 @@ def crack_password_with_chunks(zip_file, dict_file, status, dict_type):
 
     try:
         with ThreadPoolExecutor(max_workers=max_threads) as executor:
-            # 处理字典文件
-            if dict_file != 'password_list.txt':
-                for chunk in load_passwords_in_chunks(dict_file):
-                    if status["stop"]: break
-                    future_to_password = {executor.submit(crack_password, zip_file, password, status): password for password in chunk}
-                    for future in as_completed(future_to_password):
-                        if future.result() or status["stop"]:
-                            status["stop"] = True
-                            break
-            
-            # 处理内置数字字典
-            if not status["stop"] and dict_file == 'password_list.txt':
-                numeric_dict, _ = generate_numeric_dict()
-                future_to_password = {executor.submit(crack_password, zip_file, password, status): password for password in numeric_dict}
+            # 分块加载字典文件
+            for chunk in load_passwords_in_chunks(dict_file):
+                if status["stop"]: break
+                future_to_password = {executor.submit(crack_password, zip_file, password, status): password for password in chunk}
                 for future in as_completed(future_to_password):
                     if future.result() or status["stop"]:
                         status["stop"] = True
                         break
     finally:
+        # 确保显示线程在函数结束时停止
+        # 临时将stop设置为True，以便join可以退出
+        temp_stop = status["stop"]
         status["stop"] = True
         display_thread.join()
+        status["stop"] = temp_stop # 恢复状态
 
-    if "Success!" not in status:
-        print('\n[-]非常抱歉，该字典中的所有密码均已尝试完毕。')
+
+    if not status["stop"]:
+        print(f'\n[-]非常抱歉，字典 {dict_file} 中的所有密码均已尝试完毕。')
 
 
 if __name__ == '__main__':
@@ -347,10 +382,10 @@ if __name__ == '__main__':
     #Coded By Asaotomo               Update:2025.08.21
             """)
         
-        # --- 修改后的主逻辑，用于区分不同攻击模式 ---
         if len(sys.argv) < 2:
             print("\n--- 字典攻击 ---")
-            print("[*]用法1(内置字典): python3 ZipCracker.py YourZipFile.zip")
+            print("[*]用法1(内置序列): python3 ZipCracker.py YourZipFile.zip")
+            print("         └─ 默认顺序: 先尝试 password_list.txt 文件, 再尝试1-6位纯数字。")
             print("[*]用法2(自定义字典): python3 ZipCracker.py YourZipFile.zip YourDict.txt")
             print("[*]用法3(字典目录):   python3 ZipCracker.py YourZipFile.zip YourDictDirectory")
             print("\n--- 掩码攻击 ---")
@@ -367,7 +402,6 @@ if __name__ == '__main__':
             print(f'[!]系统检测到 {zip_file} 是一个加密的ZIP文件。')
             try:
                 with zipfile.ZipFile(zip_file) as zf:
-                    # 首先尝试修复伪加密
                     fixed_zip_name = fix_zip_encrypted(zip_file)
                     try:
                         with zipfile.ZipFile(fixed_zip_name) as fixed_zf:
@@ -375,18 +409,17 @@ if __name__ == '__main__':
                             fixed_zf.extractall(path=os.path.dirname(fixed_zip_name))
                             filenames = fixed_zf.namelist()
                             print(f"[*]压缩包 {zip_file} 为伪加密，系统已为您生成修复后的压缩包({fixed_zip_name})，并自动提取出{len(filenames)}个文件。")
-                            os.remove(fixed_zip_name) # 清理修复后的文件
+                            os.remove(fixed_zip_name)
                             os._exit(0)
                     except Exception:
-                        os.remove(fixed_zip_name) # 修复失败，清理临时文件
+                        os.remove(fixed_zip_name)
                         print(f'[+]压缩包 {zip_file} 不是伪加密，准备尝试暴力破解。')
-                        get_crc(zip_file, zf) # 执行CRC32碰撞检测
+                        get_crc(zip_file, zf)
             except Exception as e:
                 print(f'[+]压缩包 {zip_file} 不是伪加密，准备尝试暴力破解。')
                 with zipfile.ZipFile(zip_file) as zf:
                     get_crc(zip_file, zf)
 
-            # 初始化通用状态字典
             status = {
                 "stop": False,
                 "tried_passwords": [],
@@ -394,7 +427,6 @@ if __name__ == '__main__':
                 "total_passwords": 0
             }
 
-            # 判断攻击模式
             attack_mode = "dictionary"
             if len(sys.argv) > 2 and sys.argv[2] in ['-m', '--mask']:
                 attack_mode = "mask"
@@ -405,13 +437,23 @@ if __name__ == '__main__':
                     os._exit(1)
                 mask = sys.argv[3]
                 crack_password_with_mask(zip_file, mask, status)
-            else: # 默认字典攻击
+            else:
                 print(f"[+]系统开始进行字典暴力破解······")
                 if len(sys.argv) > 2:
                     dict_path = sys.argv[2]
                     crack_password_with_file_or_dir(zip_file, dict_path, status)
-                else: # 使用内置字典
-                    crack_password_with_chunks(zip_file, 'password_list.txt', status, "内置字典")
+                else:
+                    # <<< 修改后的默认破解逻辑 >>>
+                    # 1. 尝试内置字典文件 password_list.txt
+                    if os.path.exists('password_list.txt'):
+                        crack_password_with_file(zip_file, 'password_list.txt', status, "内置字典")
+                    else:
+                        print("[!]未找到内置字典 password_list.txt，将直接尝试纯数字字典。")
+                    
+                    # 2. 如果没找到密码，继续尝试1-6位纯数字
+                    if not status["stop"]:
+                        crack_with_generated_numeric_dict(zip_file, status)
+
         else:
             print(f'[!]系统检测到 {zip_file} 不是一个加密的ZIP文件，您可以直接解压！')
     except FileNotFoundError:
