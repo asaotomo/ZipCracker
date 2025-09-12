@@ -59,15 +59,10 @@ python3 ZipCracker_en.py test02.zip YourDictDirectory
 
 <img width="706" height="366" alt="image" src="https://github.com/user-attachments/assets/dd0a54ce-db87-4724-b965-55ec1680bb7d" />
 
-
-
-
-
-
 #### 4. Brute Force Cracking - CRC32 Collision
 
 ```
-python3 ZipCracker.py test03.zip  
+python3 ZipCracker_en.py test03.zip  
 ```
 
 <img width="1240" alt="image" src="https://github.com/user-attachments/assets/6ce39b87-a603-441e-8af5-ee993b567bce">
@@ -86,7 +81,7 @@ Mask Placeholder Rules:
 | `??` | The `?` character itself |
 
 ```
-python3 ZipCracker.py test04.zip -m '?uali?s?d?d?d'
+python3 ZipCracker_en.py test04.zip -m '?uali?s?d?d?d'
 ```
 
 The command above will attempt to crack a password with the structure: an uppercase letter + 'ali' + a special symbol + three digits (e.g., Kali@123, Bali#756, etc.).
