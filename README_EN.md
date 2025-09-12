@@ -12,7 +12,7 @@
 
 1.The program automatically checks the file size within encrypted archives. For files smaller than 6 bytes, the system will prompt the user to choose whether to attempt cracking via CRC32 hash collision.
 
-2.The program includes a built-in dictionary of 6,000 common passwords and automatically generates a list of numeric passwords ranging from 0 to 6 digits. Additionally, users can utilize their own custom dictionaries, and the program can efficiently handle even large dictionaries containing hundreds of millions of entries.
+2.The program comes with more than 6,000 common password dictionaries and automatically generates numeric passwords from 0 to 6 digits. In addition, users can supply custom dictionaries — even very large dictionaries containing hundreds of millions of entries — and the program will handle them efficiently.
 
 3.The program can automatically adjust the optimal number of threads based on the runtime environment, ensuring that the cracking process is both fast and stable.
 
@@ -40,11 +40,27 @@ python3 ZipCracker_en.py test02.zip
 
 #### 3. Brute Force Cracking - Custom Dictionary
 
+We provide two ways to load custom dictionaries:
+
+1) If you want to load a single dictionary file, specify your custom dictionary directly, for example:
+
 ```
-python3 ZipCracker_en.py test02.zip MyDict.txt  
+python3 ZipCracker.py test02.zip YourDict.txt
+```
+<img width="1240" alt="image" src="https://github.com/user-attachments/assets/4db49d4c-1d82-4461-91b5-cbbc2e0a1d53">
+
+2) If you have multiple dictionary files, you can point the script to the directory containing them; the script will load each dictionary in sequence until the correct password is found, for example:
+
+```
+python3 ZipCracker_en.py test02.zip YourDictDirectory
 ```
 
-<img width="1240" alt="image" src="https://github.com/user-attachments/assets/4db49d4c-1d82-4461-91b5-cbbc2e0a1d53">
+<img width="680" height="62" alt="image" src="https://github.com/user-attachments/assets/db99f730-fc79-46c0-949c-83f83f07a2a8" />
+
+<img width="706" height="366" alt="image" src="https://github.com/user-attachments/assets/dd0a54ce-db87-4724-b965-55ec1680bb7d" />
+
+
+
 
 
 
