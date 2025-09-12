@@ -13,7 +13,7 @@ PS：
 
 1.程序会自动检查加密压缩包中的文件大小。对于小于6字节的文件，系统将提示用户是否希望通过CRC32哈希碰撞来尝试破解。
 
-2.程序内置了6,000个常用密码词典，并自动生成0至6位纯数字的密码列表。此外，用户还可以使用自己的定制字典，即使该字典包含数亿条目的大字典，程序也能高效处理。
+2.程序内置了6,000多个常用密码词典，并自动生成0至6位纯数字的密码列表。此外，用户还可以使用自己的定制字典，即使该字典包含数亿条目的大字典，程序也能高效处理。
 
 3.程序能够根据运行环境自动调整最优线程数量，确保破解过程既快速又稳定。
 
@@ -34,10 +34,27 @@ python3 ZipCracker.py test02.zip
 <img width="800" alt="image" src="https://github.com/asaotomo/ZipCracker/assets/67818638/bcfdc434-3eb2-426f-8f83-7951c9af4b59">
 
 #### 3.暴力破解-用户自定义字典
+
+我们为您提供了2种用户自定义字典的加载方式：
+
+1) 若您仅想加载单个字典，您可以选择直接加载您的自定义字典，如下图所示：
+
 ```
-python3 ZipCracker.py test02.zip MyDict.txt
+python3 ZipCracker.py test02.zip YourDict.txt
 ```
+
 <img width="800" alt="image" src="https://github.com/asaotomo/ZipCracker/assets/67818638/c11fd091-b4a5-4b5f-ab39-8489604cf57d">
+
+2) 若您有多个字典，也可以选择直接加载您的字典所在目录，脚本会依次加载目录下所有字典，直到找到最终密码，如下图所示：
+
+```
+python3 ZipCracker.py test02.zip YourDictDirectory
+```
+
+<img width="708" height="65" alt="image" src="https://github.com/user-attachments/assets/e6394f4d-02ec-4afd-8b6f-407ccbe75882" />
+
+<img width="742" height="370" alt="image" src="https://github.com/user-attachments/assets/5dce2f67-61af-402a-9735-57e79432129e" />
+
 
 #### 4.暴力破解-CRC32碰撞
 ```
