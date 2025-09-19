@@ -92,12 +92,17 @@ python3 ZipCracker.py test04.zip -m '?uali?s?d?d?d'
 **本工具仅提供给安全测试人员进行安全自查使用**，**用户滥用造成的一切后果与作者无关**，**使用者请务必遵守当地法律** **本程序不得用于商业用途，仅限学习交流。**
 
 ---
+**【打赏支持❤️】代码传情跨山海，点滴支持皆温暖✨**
 
-**扫描关注战队公众号，获取最新动态**
+虽然代码完全开源，但每杯咖啡都能让我们走得更远 ☕️
+
+<img width="500" height="400" alt="打赏码" src="https://github.com/user-attachments/assets/02868aed-357e-4740-983a-d5a8ea05bdbf" />
+
+**【战队公众号】扫描关注战队公众号，获取最新动态**
 
 <img width="318" alt="image" src="https://user-images.githubusercontent.com/67818638/149507366-4ada14db-a972-4071-bbb6-197659f61ced.png">
 
-**【知识星球】福利大放送**
+**【战队知识星球】福利大放送**
 
 <img width="318" alt="image" src="https://github.com/user-attachments/assets/94849d79-bcac-4a43-9221-3e2718225cb6">
 
