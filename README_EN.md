@@ -96,11 +96,16 @@ The command above will attempt to crack a password with the structure: an upperc
 This tool is provided for security testers for self-assessment purposes only. The author is not responsible for any misuse or consequences caused by users. Users must comply with local laws. This program should not be used for commercial purposes and is intended for learning and education purposes only.
 
 ------
+**【Support with Tips ❤️】 Code Connects Hearts Across Mountains and Seas, Every Bit of Support Warms Like Sunshine ✨**
 
-**Scan and follow the team's official account for the latest updates.**
+While our code is fully open-source, every cup of coffee fuels our journey to go further ☕️
+
+<img width="500" height="400" alt="打赏码" src="https://github.com/user-attachments/assets/02868aed-357e-4740-983a-d5a8ea05bdbf" />
+
+**【Team Official Account】Scan and follow the team's official account for the latest updates.**
 
 <img width="318" alt="image" src="https://user-images.githubusercontent.com/67818638/149507366-4ada14db-a972-4071-bbb6-197659f61ced.png">
 
-**【Knowledge Planet】Big Giveaway**
+**【Team Knowledge Planet】Big Giveaway**
 
 <img width="318" alt="image" src="https://github.com/user-attachments/assets/94849d79-bcac-4a43-9221-3e2718225cb6">
