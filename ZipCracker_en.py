@@ -436,7 +436,7 @@ def crack_password_with_file(zip_file, dict_file, status, dict_type, out_dir):
 
 if __name__ == '__main__':
     try:
-        print("""                          
+        print(r"""                          
      ______          ____                _   [*]Hx0 Team
     |__  (_)_ __    / ___|_ __ __ _  ___| | _____ _ __ 
       / /| | '_ \  | |   | '__/ _ |/ __| |/ / _ \ '__|
