@@ -33,6 +33,58 @@ CHARSET_SYMBOLS = string.punctuation
 OUT_DIR_DEFAULT = "unzipped_files"
 
 
+def _decode_zip_name(name: str) -> str:
+    """
+    把 ZipInfo.filename（被当作 cp437 的 str）还原为 bytes，
+    再按 utf-8 -> gbk -> gb18030 -> latin1 顺序回退到正确的中文。
+    用于“写入磁盘时的文件名”和“打印展示”。
+    """
+    try:
+        raw = name.encode('cp437', errors='replace')
+    except Exception:
+        # 极少数实现拿不到 cp437，直接回退
+        return name
+    for enc in ('utf-8', 'gbk', 'gb18030', 'latin1'):
+        try:
+            s = raw.decode(enc)
+            if '�' not in s:
+                return s
+        except Exception:
+            pass
+    return raw.decode('latin1', errors='ignore')
+
+
+def _safe_extract_all(zf, out_dir: str, pwd: bytes | None = None):
+    """
+    仅替代 extractall：逐条读取 -> 用 _decode_zip_name 修正名字 -> 写入磁盘。
+    不改你的其余流程。
+    """
+    import os
+    os.makedirs(out_dir, exist_ok=True)
+    for info in zf.infolist():
+        # 目标路径（修复后的中文）
+        decoded = _decode_zip_name(info.filename)
+        # 防路径穿越
+        norm_path = os.path.normpath(decoded)
+        if norm_path.startswith(("..", "/", "\\")):
+            continue
+
+        dst = os.path.join(out_dir, norm_path)
+        if info.is_dir() or decoded.endswith('/'):
+            os.makedirs(dst, exist_ok=True)
+            continue
+
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        # 读取条目（兼容是否需要 pwd）
+        try:
+            data = zf.read(info.filename, pwd=pwd) if pwd is not None else zf.read(info.filename)
+        except TypeError:
+            # 某些实现 read() 不接受 pwd 形参
+            data = zf.read(info.filename)
+        with open(dst, 'wb') as f:
+            f.write(data)
+
+
 def is_zip_encrypted(file_path):
     """
     检查zip文件是否存在伪加密
@@ -169,19 +221,19 @@ def crack_password(zip_file: str, password: str, status: dict, out_dir: str):
             status["stop"] = True
 
         print(f'\n\n[+] 恭喜您！密码破解成功, 该压缩包的密码为：{password}')
-        
+
+        _clean_and_create_outdir(out_dir)
         try:
-            _clean_and_create_outdir(out_dir)
             if HAS_PYZIPPER:
                 with pyzipper.AESZipFile(zip_file, 'r') as zf:
-                    zf.extractall(path=out_dir, pwd=pwd_bytes)
+                    _safe_extract_all(zf, out_dir, pwd=pwd_bytes)
+                    raw_names = zf.namelist()
             else:
                 with zipfile.ZipFile(zip_file, 'r') as zf:
-                    zf.extractall(path=out_dir, pwd=pwd_bytes)
-            
-            with zipfile.ZipFile(zip_file) as zf_info:
-                filenames = zf_info.namelist()
-                print(f"\n[*] 系统已为您自动提取出 {len(filenames)} 个文件到 '{out_dir}' 文件夹中: {filenames}")
+                    _safe_extract_all(zf, out_dir, pwd=pwd_bytes)
+                    raw_names = zf.namelist()
+            filenames = [_decode_zip_name(n) for n in raw_names if not n.endswith('/')]
+            print(f"\n[*] 系统已为您自动提取出 {len(filenames)} 个文件到 '{out_dir}' 文件夹中: {filenames}")
         except Exception as e:
             print(f"\n[!] 密码正确，但解压文件时发生错误: {e}")
 
@@ -511,9 +563,11 @@ if __name__ == '__main__':
                 print(f"[*] 伪加密修复成功！文件 '{zip_file}' 无需密码。")
                 _clean_and_create_outdir(out_dir)
                 with zipfile.ZipFile(fixed_zip_name) as fixed_zf:
-                    fixed_zf.extractall(path=out_dir)
-                    filenames = fixed_zf.namelist()
+                    _safe_extract_all(fixed_zf, out_dir)  # 用修复后的名字写入磁盘
+                    raw_names = fixed_zf.namelist()
+                    filenames = [_decode_zip_name(n) for n in raw_names if not n.endswith('/')]
                     print(f"[*] 系统已为您自动提取出 {len(filenames)} 个文件到 '{out_dir}' 文件夹中: {filenames}")
+
                 os.remove(fixed_zip_name)
                 os._exit(0)
 

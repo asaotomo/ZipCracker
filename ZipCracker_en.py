@@ -33,6 +33,55 @@ CHARSET_SYMBOLS = string.punctuation
 OUT_DIR_DEFAULT = "unzipped_files"
 
 
+def _decode_zip_name(name: str) -> str:
+    """
+    Convert zipinfo.filename (decoded as cp437 by Python) back to bytes
+    then try utf-8 -> gbk -> gb18030 -> latin1 to recover Chinese names.
+    Safe fallback to latin1.
+    """
+    try:
+        raw = name.encode('cp437', errors='replace')
+    except Exception:
+        return name
+    for enc in ('utf-8', 'gbk', 'gb18030', 'latin1'):
+        try:
+            s = raw.decode(enc)
+            if '�' not in s:
+                return s
+        except Exception:
+            pass
+    return raw.decode('latin1', errors='ignore')
+
+
+def _safe_extract_all(zf, out_dir: str, pwd: bytes | None = None):
+    """
+    Replacement for ZipFile.extractall that:
+    - decodes filenames with _decode_zip_name for both saving and display
+    - prevents path traversal
+    - supports optional pwd (compatible with both zipfile and pyzipper)
+    """
+    import os
+    os.makedirs(out_dir, exist_ok=True)
+    for info in zf.infolist():
+        decoded = _decode_zip_name(info.filename)
+        normalized = os.path.normpath(decoded)
+        # prevent path traversal or absolute paths
+        if normalized.startswith(("..", "/", "\\")):
+            continue
+        dst = os.path.join(out_dir, normalized)
+        if info.is_dir() or decoded.endswith('/'):
+            os.makedirs(dst, exist_ok=True)
+            continue
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        try:
+            data = zf.read(info.filename, pwd=pwd) if pwd is not None else zf.read(info.filename)
+        except TypeError:
+            # some implementations don't accept pwd in read()
+            data = zf.read(info.filename)
+        with open(dst, 'wb') as f:
+            f.write(data)
+
+
 def is_zip_encrypted(file_path):
     """
     Check if the zip file is pseudo-encrypted.
@@ -169,19 +218,20 @@ def crack_password(zip_file: str, password: str, status: dict, out_dir: str):
             status["stop"] = True
 
         print(f'\n\n[+] Success! The password is: {password}')
-        
+
+        _clean_and_create_outdir(out_dir)
         try:
-            _clean_and_create_outdir(out_dir)
             if HAS_PYZIPPER:
                 with pyzipper.AESZipFile(zip_file, 'r') as zf:
-                    zf.extractall(path=out_dir, pwd=pwd_bytes)
+                    _safe_extract_all(zf, out_dir, pwd=pwd_bytes)
+                    raw_names = zf.namelist()
             else:
                 with zipfile.ZipFile(zip_file, 'r') as zf:
-                    zf.extractall(path=out_dir, pwd=pwd_bytes)
-            
-            with zipfile.ZipFile(zip_file) as zf_info:
-                filenames = zf_info.namelist()
-                print(f"\n[*] Successfully extracted {len(filenames)} file(s) to the '{out_dir}' directory: {filenames}")
+                    _safe_extract_all(zf, out_dir, pwd=pwd_bytes)
+                    raw_names = zf.namelist()
+
+            filenames = [_decode_zip_name(n) for n in raw_names if not n.endswith('/')]
+            print(f"\n[*] Successfully extracted {len(filenames)} file(s) to the '{out_dir}' directory: {filenames}")
         except Exception as e:
             print(f"\n[!] Password is correct, but an error occurred during extraction: {e}")
 
@@ -511,8 +561,9 @@ if __name__ == '__main__':
                 print(f"[*] Pseudo-encryption fixed successfully! File '{zip_file}' does not require a password.")
                 _clean_and_create_outdir(out_dir)
                 with zipfile.ZipFile(fixed_zip_name) as fixed_zf:
-                    fixed_zf.extractall(path=out_dir)
-                    filenames = fixed_zf.namelist()
+                    _safe_extract_all(fixed_zf, out_dir)
+                    raw_names = fixed_zf.namelist()
+                    filenames = [_decode_zip_name(n) for n in raw_names if not n.endswith('/')]
                     print(f"[*] Successfully extracted {len(filenames)} file(s) to the '{out_dir}' directory: {filenames}")
                 os.remove(fixed_zip_name)
                 os._exit(0)
