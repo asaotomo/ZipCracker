@@ -89,6 +89,25 @@ python3 ZipCracker.py test04.zip -m '?uali?s?d?d?d'
 
 ---
 
+### 🚀 ClawHub AI 技能集成 (New!)
+
+---
+
+**ZipCracker 现已正式上线 ClawHub 技能中心！** 现在你可以直接在🦞OpenClaw中无缝调用 ZipCracker，通过自然语言对话来完成自动化的解密和破解任务，让 CTF 比赛和安全自查更加高效。
+
+👉 **技能主页地址：** [https://clawhub.ai/asaotomo/zipcracker](https://clawhub.ai/asaotomo/zipcracker)
+
+**安装方法：**
+
+请确保你已经安装并配置好了 ClawHub 客户端，然后在终端中执行以下命令一键安装本技能：
+
+```bash
+clawhub install zipcracker
+```
+安装完成后，你可以直接对 AI 助手说：“帮我用 ZipCracker 破解这个压缩包，尝试一下掩码攻击，格式是四个数字”，它将自动为你构建并执行对应的命令。
+
+---
+
 **本工具仅提供给安全测试人员进行安全自查使用**，**用户滥用造成的一切后果与作者无关**，**使用者请务必遵守当地法律** **本程序不得用于商业用途，仅限学习交流。**
 
 ---
