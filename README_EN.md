@@ -90,6 +90,24 @@ The command above will attempt to crack a password with the structure: an upperc
 
 <img width="743" height="267" alt="image" src="https://github.com/user-attachments/assets/060265e3-fe54-47cb-99f3-43b6dcf41409" />
 
+------
+
+### 🚀 ClawHub AI Skill Integration (New!)
+
+---
+
+**ZipCracker is now officially available on the ClawHub Skill Center!** You can now seamlessly invoke ZipCracker directly within 🦞OpenClaw. By using natural language, you can automate decryption and cracking tasks, making your CTF competitions and security audits much more efficient.
+
+👉 **Skill Homepage:** [https://clawhub.ai/asaotomo/zipcracker](https://clawhub.ai/asaotomo/zipcracker)
+
+**Installation:**
+
+Please ensure that you have installed and configured the ClawHub client. Then, run the following command in your terminal to install this skill with one click:
+
+```bash
+clawhub install zipcracker
+```
+Once installed, you can simply tell your AI assistant: "Help me crack this zip archive using ZipCracker, try a mask attack with a four-digit format." It will automatically build and execute the corresponding command for you.
 
 ------
 
