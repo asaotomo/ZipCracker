@@ -1,4 +1,4 @@
-### 新版 ZipCracker 使用说明
+### ZipCracker（新版本） —— 使用说明
 
 [English](./README_EN.md)
 
