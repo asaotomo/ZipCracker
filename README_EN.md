@@ -1,129 +1,410 @@
-### Tool Introduction
-
-------
+### ZipCracker (New Version) — User Guide
 
 [中文](./README.md)
 
-***ZipCracker is a high-performance, multi-threaded cracking tool developed by Team Hx0, designed specifically for cracking password-protected Zip files. It uses methods such as CRC32 collision, dictionary attacks, and mask attacks to guess the plaintext or password of a Zip file and successfully extract its contents. This tool can also identify and automatically repair "pseudo-encrypted" Zip files, making it highly suitable for use in CTF competitions.***
+**ZipCracker** is a **comprehensive ZIP cracking and recovery tool** developed by **Team Hx0**. It is a strong fit for **common ZIP challenges in CTF**, as well as **authorized security testing** and **recovering your own encrypted backups**. It combines **pseudo-encryption detection and repair, dictionary attacks, mask attacks, short-plaintext CRC32 preimage search, and known-plaintext attack (KPA)** into one workflow, with **fast loading of huge wordlists, multi-threaded scheduling**, and **automatic extraction** after success so you can analyze and recover ZIPs **efficiently**.
 
-<img width="1510" alt="image" src="https://github.com/user-attachments/assets/c698572c-2ea5-4f22-820d-5cf512eb70ec" />
+Use **`ZipCracker_en.py`** for English UI; **`ZipCracker.py`** is the Chinese UI. Both call the same core.
 
-**Note:**
+<img  alt="ZipCracker overview" src="https://github.com/user-attachments/assets/240d75b0-16dd-4777-9143-38916fd7253b" />
 
-1.The program automatically checks the file size within encrypted archives. For files smaller than 6 bytes, the system will prompt the user to choose whether to attempt cracking via CRC32 hash collision.
+**Main capabilities at a glance:**
 
-2.The program comes with more than 6,000 common password dictionaries and automatically generates numeric passwords from 0 to 6 digits. In addition, users can supply custom dictionaries — even very large dictionaries containing hundreds of millions of entries — and the program will handle them efficiently.
+- Pseudo-encryption detection and repair
+- Standard dictionary attacks
+- Custom wordlist file or directory of wordlists
+- Mask attacks
+- Short-plaintext recovery via CRC32 enumeration (1–6 byte entries)
+- Known-plaintext attack (`-kpa`)
+- Auto-extract after a successful crack
 
-3.The program can automatically adjust the optimal number of threads based on the runtime environment, ensuring that the cracking process is both fast and stable.
+If you are new here, these three sections are enough to get started:
 
-4.The program not only supports attempting to decrypt compressed packages encrypted with traditional encryption algorithms but also has the capability to decrypt compressed packages encrypted with AES.
+1. [Quick start](#quick-start)
+2. [Common usage](#common-usage)
+3. [FAQ](#faq)
 
-### Usage
+### Quick start
 
-------
+Typical first commands:
 
-#### 1. Pseudo-Encryption Identification and Repair
+```bash
+# 1. Pseudo-encryption check and repair
+python3 ZipCracker_en.py test01.zip
 
+# 2. Default dictionary attack
+python3 ZipCracker_en.py test02.zip
+
+# 3. Known-plaintext attack
+python3 ZipCracker_en.py test05.zip -kpa test05_plain.txt
+
+# 4. Huge wordlist (recommended)
+ZIPCRACKER_SKIP_DICT_COUNT=1 python3 ZipCracker_en.py target.zip huge_dict.txt
 ```
-python3 ZipCracker_en.py test01.zip  
+
+### Runtime environment
+
+| Item     | Notes                                                |
+| :------- | :--------------------------------------------------- |
+| Python   | Minimum **Python 3.7**; **Python 3.10+** recommended |
+| OS       | Linux / macOS / Windows                              |
+| Required | Python standard library only                         |
+| Optional | `pyzipper` — AES ZIP support                         |
+| Optional | `bkcrack` — faster KPA recovery when applicable      |
+
+If you see:
+
+```text
+TypeError: 'type' object is not subscriptable
 ```
 
-<img width="1240" alt="image" src="https://github.com/user-attachments/assets/b6e2b0ea-9c93-42b4-acf3-888909d7365b">
+your Python is likely too old. Check:
 
-
-#### 2. Brute Force Cracking - Built-in Dictionary
-
-```
-python3 ZipCracker_en.py test02.zip  
+```bash
+python --version
 ```
 
-<img width="1240" alt="image" src="https://github.com/user-attachments/assets/fb00a9a8-a197-4df6-bac6-89868862135f">
+Upgrade to **Python 3.10+** when possible.
 
+### Optional dependencies
 
-#### 3. Brute Force Cracking - Custom Dictionary
+#### 1. `pyzipper`
 
-We provide two ways to load custom dictionaries:
+Used for **AES** ZIP entries.
 
-1) If you want to load a single dictionary file, specify your custom dictionary directly, for example:
+Behavior:
 
+- If installed, AES support is enabled automatically.
+- If missing, the script may prompt to install; you can enter `n` to skip.
+- In Chinese UI mode, one-key install prefers the Tsinghua PyPI mirror and falls back to the official index.
+
+Manual install (example):
+
+```bash
+python3 -m pip install pyzipper
 ```
-python3 ZipCracker.py test02.zip YourDict.txt
-```
-<img width="1240" alt="image" src="https://github.com/user-attachments/assets/4db49d4c-1d82-4461-91b5-cbbc2e0a1d53">
 
-2) If you have multiple dictionary files, you can point the script to the directory containing them; the script will load each dictionary in sequence until the correct password is found, for example:
+If the archive uses AES, the script also reminds you that:
 
+1. AES verification and extraction are usually **much slower** than legacy ZipCrypto.
+2. Without `pyzipper`, AES entry checks or extraction may **fail** — install it first when dealing with AES.
+
+#### 2. `bkcrack`
+
+Mainly used for **dictionary-free recovery** during `-kpa` known-plaintext attacks.
+
+Behavior:
+
+- If `bkcrack` is detected, a faster path is tried first.
+- If not found, the script suggests how to install it for your OS; `n` skips and other methods continue.
+- If you pass **`--bkcrack`**, `bkcrack` is **required**; the program exits if it is not available.
+
+On Windows, if runtime libraries are missing, the program prints:
+
+- Microsoft docs: [Latest supported VC++ Redistributable](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist)
+- Direct download links for your architecture
+
+### Common usage
+
+#### 1. Pseudo-encryption detection and repair
+
+```bash
+python3 ZipCracker_en.py test01.zip
 ```
+
+<img width="1558" height="474" alt="267ab0f0-2340-4ed2-a3d5-11a0305753d4" src="https://github.com/user-attachments/assets/401c3f1c-01fb-4912-bd96-df9db397fa83" />
+
+#### 2. Default dictionary attack
+
+```bash
+python3 ZipCracker_en.py test02.zip
+```
+
+By default it tries, in order:
+
+1. `password_list.txt`
+2. Numeric passwords from **1** to **6** digits
+
+<img width="2948" height="1436" alt="c0169c6d-83a8-45cc-94e4-6aa849dc3f62" src="https://github.com/user-attachments/assets/f0e6a997-c65c-4a3c-8d40-3787b9fc8f7b" />
+
+If you run:
+
+```bash
+python3 ZipCracker_en.py your.zip
+```
+
+and the usual paths fail, the tool also looks inside the archive for entries that look like **template KPA** candidates (e.g. `png`, `zip`, `exe`, `pcapng`). When confidence is high enough, it may ask whether to switch to **template KPA** mode automatically.
+
+Example:
+
+```bash
+python3 ZipCracker_en.py test06_image.zip
+```
+
+<img width="2948" height="1436" alt="5eeb70f3-0dfa-4bdd-a1ac-6ce4232a4c52" src="https://github.com/user-attachments/assets/7cfd4f38-5148-4015-94a6-1417c43da03d" />
+
+
+#### 3. Custom wordlists
+
+Single file:
+
+```bash
+python3 ZipCracker_en.py test02.zip YourDict.txt
+```
+
+<img width="1672" height="770" alt="c98b517a-badf-4be7-8f63-cb4d92fedae9" src="https://github.com/user-attachments/assets/a8f493aa-8f9e-4d60-ab24-e525e3acf7b9" />
+
+
+Directory of wordlists (tried in sequence):
+
+```bash
 python3 ZipCracker_en.py test02.zip YourDictDirectory
 ```
 
-<img width="680" height="62" alt="image" src="https://github.com/user-attachments/assets/db99f730-fc79-46c0-949c-83f83f07a2a8" />
+<img width="1814" height="1188" alt="bd70f862-71d0-41ae-b6cc-7614c4bac594" src="https://github.com/user-attachments/assets/6d87acba-fbce-4cf5-a021-c65531203b6c" />
 
-<img width="706" height="366" alt="image" src="https://github.com/user-attachments/assets/dd0a54ce-db87-4724-b965-55ec1680bb7d" />
 
-#### 4. Brute Force Cracking - CRC32 Collision
+#### 4. Short-plaintext CRC32 enumeration
 
+For ZIP entries **1–6 bytes** long, the tool can enumerate printable plaintexts whose CRC32 matches the stored value. When a candidate matches, the terminal prompts whether to proceed.
+
+```bash
+python3 ZipCracker_en.py test03.zip
 ```
-python3 ZipCracker_en.py test03.zip  
-```
 
-<img width="1240" alt="image" src="https://github.com/user-attachments/assets/6ce39b87-a603-441e-8af5-ee993b567bce">
+<img width="2034" height="654" alt="fdf63111-adc6-4b5a-9f26-18e053c590c3" src="https://github.com/user-attachments/assets/cd902438-c9e2-4842-811c-3d2ce7fa56e4" />
 
-#### 5. Brute Force Cracking - Mask Attack
-When you know the partial structure of the password (e.g., company name + year), a mask attack is the most efficient method. You can use special placeholders to define the password's format, significantly narrowing the search space.
 
-Mask Placeholder Rules:
+#### 5. Mask attack
 
-| Placeholder | Character Set Represented |
-| :--- | :----------- |
-| `?d` | Digits (0-9) |
-| `?l` | Lowercase Letters (a-z) |
-| `?u` | Uppercase Letters (A-Z) |
-| `?s` | Special Symbols (!@#$etc.) |
-| `??` | The `?` character itself |
-
-```
+```bash
 python3 ZipCracker_en.py test04.zip -m '?uali?s?d?d?d'
 ```
 
-The command above will attempt to crack a password with the structure: an uppercase letter + 'ali' + a special symbol + three digits (e.g., Kali@123, Bali#756, etc.).
+Mask placeholders:
 
-<img width="743" height="267" alt="image" src="https://github.com/user-attachments/assets/060265e3-fe54-47cb-99f3-43b6dcf41409" />
+| Placeholder | Meaning            |
+| :---------- | :----------------- |
+| `?d`        | Digits `0-9`       |
+| `?l`        | Lowercase `a-z`    |
+| `?u`        | Uppercase `A-Z`    |
+| `?s`        | Special characters |
+| `??`        | Literal `?`        |
 
-------
+<img width="1706" height="734" alt="a1eb3022-9ddd-4ed7-a0fa-aa1c5cd17efa" src="https://github.com/user-attachments/assets/ed874fda-e6ce-4d30-bb5c-7dbaa4e1932d" />
 
-### 🚀 ClawHub AI Skill Integration (New!)
+#### 6. Known-plaintext attack (`-kpa`)
 
----
+Tries **`bkcrack` first** when available, then falls back to dictionary/mask flows:
 
-**ZipCracker is now officially available on the ClawHub Skill Center!** You can now seamlessly invoke ZipCracker directly within 🦞OpenClaw. By using natural language, you can automate decryption and cracking tasks, making your CTF competitions and security audits much more efficient.
+```bash
+python3 ZipCracker_en.py test05.zip -kpa test05_plain.txt
+```
 
-👉 **Skill Homepage:** [https://clawhub.ai/asaotomo/zipcracker](https://clawhub.ai/asaotomo/zipcracker)
+<img width="2854" height="826" alt="9ec86c17-73db-4f24-8eff-14a5cd66ff23" src="https://github.com/user-attachments/assets/fe82b6d4-04aa-4d1f-a278-949acdc6b43e" />
 
-**Installation:**
 
-Please ensure that you have installed and configured the ClawHub client. Then, run the following command in your terminal to install this skill with one click:
+If you have an **unencrypted reference ZIP** instead of a loose file:
+
+```bash
+python3 ZipCracker_en.py C.zip -kpa M.zip
+```
+
+<img width="1483" height="500" alt="image" src="https://github.com/user-attachments/assets/90c6dfd0-993c-4a83-970d-bb8f46be995b" />
+
+Notes:
+
+1. After `-kpa` you can pass either a normal file or a **passwordless** ZIP.
+2. If you pass a ZIP, the tool prefers an entry **with the same name** as in the target.
+3. If you pass a plain file, it still prefers **same-name** matching inside the target ZIP.
+4. If the plaintext ZIP contains **only one** normal file, that file is used automatically.
+
+Force a specific entry inside the target ZIP:
+
+```bash
+python3 ZipCracker_en.py test05.zip -kpa test05_plain.txt -c test05_plain.txt
+```
+
+**Partial plaintext** — offset and extra known bytes:
+
+```bash
+python3 ZipCracker_en.py secret.zip -kpa part.bin --kpa-offset 78 -x 0 4d5a
+```
+
+Notes:
+
+1. `--kpa-offset` — start offset of this plaintext inside the **target** file.
+2. `-x` — extra known bytes: `-x <offset> <hex>` (repeatable).
+3. Shorthand: `-x 0:4d5a`.
+
+**Built-in file-header templates:**
+
+```bash
+python3 ZipCracker_en.py target.zip --kpa-template png -c image.png
+python3 ZipCracker_en.py target.zip --kpa-template exe -c app.exe
+python3 ZipCracker_en.py target.zip --kpa-template pcapng -c capture.pcapng
+python3 ZipCracker_en.py target.zip --kpa-template zip -c inside.zip
+```
+
+Available templates: `png`, `zip`, `exe`, `pcapng`.
+
+**`bkcrack` only:**
+
+```bash
+python3 ZipCracker_en.py test05.zip -kpa test05_plain.txt --bkcrack
+```
+
+Difference:
+
+- `-kpa` — if `bkcrack` fails, other methods can still run.
+- `-kpa --bkcrack` — **only** `bkcrack`; stop if it fails.
+
+#### 7. Output directory
+
+```bash
+python3 ZipCracker_en.py test02.zip -o output_dir
+```
+
+### Huge wordlists
+
+ZipCracker can handle **very large** wordlists without loading the entire file into memory.
+
+For **10GB+** lists, skip the pre-count pass:
+
+```bash
+ZIPCRACKER_SKIP_DICT_COUNT=1 python3 ZipCracker_en.py your.zip your_big_dict.txt
+```
+
+<img width="2642" height="692" alt="7ee7fc4c-df6f-4b6f-8d0d-cf09079f016e" src="https://github.com/user-attachments/assets/e34f4e2f-1e2a-48f3-9715-c14564196aa4" />
+
+
+Benefits:
+
+1. Faster startup
+2. Lower, steadier memory use
+3. Progress switches to **streaming** mode (by bytes read)
+
+### FAQ
+
+#### 1. Why is AES so slow?
+
+That is **normal**. AES password checks and decryption are usually **much slower** than ZipCrypto. The script warns you when AES is detected.
+
+#### 2. What if `pyzipper` is not installed?
+
+For AES entries, without `pyzipper`:
+
+1. The script may prompt you to install (or skip with `n`).
+2. Verification or extraction of AES entries may **fail**.
+
+Safest approach: install first.
+
+```bash
+python3 -m pip install pyzipper
+```
+
+#### 3. Windows: `CERTIFICATE_VERIFY_FAILED` when installing `bkcrack`
+
+This is usually **Python HTTPS certificate verification**, not “GitHub is blocked” alone.
+
+The script tries, in order: Python’s downloader, then `curl.exe` on Windows, then PowerShell.
+
+If it still fails, check:
+
+1. System clock accuracy
+2. Proxies, gateways, or AV intercepting HTTPS
+3. Whether a browser can open the GitHub release page
+
+#### 4. Windows: `bkcrack` exit code `3221225477`
+
+Hex:
+
+```text
+0xC0000005
+```
+
+This is an **Access Violation** — `bkcrack.exe` crashed. It is usually **not** “wrong password”. Try:
+
+```bat
+set BKCRACK_JOBS=1
+python ZipCracker_en.py test05.zip -kpa test05_plain.txt
+```
+
+Also try:
+
+1. Install or repair **Microsoft Visual C++ Redistributable**
+2. Temporarily disable AV or allowlist `bkcrack.exe`
+3. If it still crashes, prefer **WSL / Linux** for `bkcrack`
+
+#### 5. Fan still spinning after extraction succeeded?
+
+The script may still be trying to **recover the original ZIP password** after a successful extract.
+
+To skip that:
+
+```bash
+ZIPCRACKER_SKIP_ORIG_PW_RECOVERY=1 python3 ZipCracker_en.py test05.zip -kpa test05_plain.txt
+```
+
+#### 6. Huge wordlist looks idle at first?
+
+By default the script **counts** total candidates first. For faster startup:
+
+```bash
+ZIPCRACKER_SKIP_DICT_COUNT=1 python3 ZipCracker_en.py your.zip your_big_dict.txt
+```
+
+<img width="2642" height="692" alt="cf3c32c6-19c8-4aab-bfb1-de0db357e654" src="https://github.com/user-attachments/assets/1cbf3bcc-9553-496d-b651-529a4f8c7076" />
+
+
+### Common environment variables
+
+| Variable                             | Effect                                                       |
+| :----------------------------------- | :----------------------------------------------------------- |
+| `ZIPCRACKER_SKIP_DICT_COUNT=1`       | Skip pre-count for huge wordlists                            |
+| `ZIPCRACKER_SKIP_ORIG_PW_RECOVERY=1` | After KPA extract, do not keep recovering the original ZIP password |
+| `ZIPCRACKER_AUTO_INSTALL_PYZIPPER=0` | Skip automatic `pyzipper` install prompts                    |
+| `ZIPCRACKER_AUTO_INSTALL_BKCRACK=0`  | Skip automatic `bkcrack` install prompts                     |
+| `BKCRACK_JOBS=1`                     | Lower `bkcrack` thread count (useful on Windows)             |
+
+### Special Acknowledgments
+
+Thanks to **[LANDY](https://github.com/LANDY-LI-2025)** for support and feedback on this project.
+
+### ClawHub AI skill integration (New!)
+
+**ZipCracker** is listed on the [ClawHub skill hub](https://clawhub.ai/asaotomo/zipcracker). In **OpenClaw** you can invoke it with natural language so the assistant builds and runs decrypt/crack flows — handy for CTF and authorized self-checks.
+
+**Skill page:** https://clawhub.ai/asaotomo/zipcracker
+
+**Install:** Set up the [ClawHub](https://clawhub.ai) client, then run:
 
 ```bash
 clawhub install zipcracker
 ```
-Once installed, you can simply tell your AI assistant: "Help me crack this zip archive using ZipCracker, try a mask attack with a four-digit format." It will automatically build and execute the corresponding command for you.
 
-------
+Then you can say things like: “Crack this ZIP with ZipCracker, try a mask of four digits,” and the assistant will construct the right command.
 
-This tool is provided for security testers for self-assessment purposes only. The author is not responsible for any misuse or consequences caused by users. Users must comply with local laws. This program should not be used for commercial purposes and is intended for learning and education purposes only.
+### Disclaimer
 
-------
-**【Support with Tips ❤️】 Code Connects Hearts Across Mountains and Seas, Every Bit of Support Warms Like Sunshine ✨**
+Use this tool **only where you have legal permission**, for example:
 
-While our code is fully open-source, every cup of coffee fuels our journey to go further ☕️
+- CTF / practice ranges
+- Recovering **your own** data
+- **Authorized** security testing
 
-<img width="500" height="400" alt="打赏码" src="https://github.com/user-attachments/assets/02868aed-357e-4740-983a-d5a8ea05bdbf" />
+Do **not** use it for unauthorized access or other illegal purposes.
 
-**【Team Official Account】Scan and follow the team's official account for the latest updates.**
+---
 
-<img width="318" alt="image" src="https://user-images.githubusercontent.com/67818638/149507366-4ada14db-a972-4071-bbb6-197659f61ced.png">
+**Support with tips** — The code is open source; every bit of help keeps the project going.
 
-**【Team Knowledge Planet】Big Giveaway**
+<img width="500" height="400" alt="Tip QR" src="https://github.com/user-attachments/assets/02868aed-357e-4740-983a-d5a8ea05bdbf" />
 
-<img width="318" alt="image" src="https://github.com/user-attachments/assets/94849d79-bcac-4a43-9221-3e2718225cb6">
+**Team official account** — Follow for updates.
+
+<img width="318" alt="Team WeChat" src="https://user-images.githubusercontent.com/67818638/149507366-4ada14db-a972-4071-bbb6-197659f61ced.png">
+
+**Team knowledge planet**
+
+<img height="380" alt="Knowledge planet" src="https://github.com/user-attachments/assets/c9999f9c-2f24-4aca-9b42-c6c58f5d4083" />
