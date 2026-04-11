@@ -387,9 +387,9 @@ ZIPCRACKER_SKIP_DICT_COUNT=1 python3 ZipCracker.py your.zip your_big_dict.txt
 | `ZIPCRACKER_AUTO_INSTALL_BKCRACK=0` | 自动跳过 `bkcrack` 安装提示 |
 | `BKCRACK_JOBS=1` | 降低 `bkcrack` 线程数，适合 Windows 排障 |
 
-### 鸣谢
+### 特别鸣谢
 
-感谢 **LANDY** 对本项目的支持与建议。
+感谢 **[@LANDY](https://github.com/LANDY-LI-2025)** 对本项目的支持与建议。
 
 
 ### 🚀 ClawHub AI 技能集成 (New!)
