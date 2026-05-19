@@ -3681,19 +3681,20 @@ class PasswordVerifier:
             )
 
         password_bytes = password.encode("utf-8")
+        # 每次验证都重新打开 ZipFile，避免多次 read() 后内部状态损坏导致 zlib.error
+        # 详见: https://github.com/asaotomo/ZipCracker/issues/xxx
         try:
-            archive = self._get_thread_archive()
-            if self.verification_entry:
-                archive.read(self.verification_entry, pwd=password_bytes)
-            else:
-                archive.testzip(pwd=password_bytes)
-            return True
+            with self._open_archive() as archive:
+                if self.verification_entry:
+                    archive.read(self.verification_entry, pwd=password_bytes)
+                else:
+                    archive.testzip()
+                return True
         except RuntimeError:
             return False
         except KeyboardInterrupt:
             raise
         except Exception:
-            self.reset_thread_archive()
             return False
 
     def extract(self, password: str, out_dir: str) -> list[str]:
