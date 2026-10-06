@@ -14,6 +14,7 @@
 - 掩码爆破
 - 短明文 CRC32 枚举恢复
 - 已知明文攻击（`-kpa`）
+- 套娃解压（`-r`，递归处理嵌套压缩包）
 - 破解成功后自动解压
 
 如果你只是第一次使用，这份 README 看下面 3 个部分就够了：
@@ -36,7 +37,10 @@ python3 ZipCracker.py test02.zip
 # 3. 已知明文攻击
 python3 ZipCracker.py test05.zip -kpa test05_plain.txt
 
-# 4. 超大字典推荐写法
+# 4. 套娃解压（递归处理嵌套压缩包）
+python3 ZipCracker.py 1000.zip -r
+
+# 5. 超大字典推荐写法
 ZIPCRACKER_SKIP_DICT_COUNT=1 python3 ZipCracker.py target.zip huge_dict.txt
 ```
 
@@ -282,6 +286,32 @@ python3 ZipCracker.py test05.zip -kpa test05_plain.txt --bkcrack
 ```bash
 python3 ZipCracker.py test02.zip -o output_dir
 ```
+
+#### 8. 套娃解压（递归处理嵌套压缩包）
+
+有的题目是压缩包套压缩包，一层套一层动辄上百层。加上 `-r` / `--recursive` 后，ZipCracker 会在当前压缩包破解或解压成功后，自动扫描解压结果中的嵌套 ZIP，并对每一层重新执行完整流程（伪加密修复 → CRC32 短明文 → 字典/掩码），直到没有更多嵌套包：
+
+```bash
+python3 ZipCracker.py 1000.zip -r
+```
+
+行为说明：
+
+1. 未加密的层会直接解压并继续向下扫描
+2. 每一层解压到输出目录下独立的 `nested_序号_包名` 目录，避免同名覆盖，也避免上千层链路在 Windows 上触发超长路径问题
+3. 处理成功的中间压缩包**默认自动删除**，1000 层的题目不会把磁盘吃满；想保留请加 `--keep-nested-zips`
+4. `--max-depth N` 限制最大递归深度（默认 `2048`），防止恶意构造的深度炸弹
+5. 未能自动破解的嵌套包会保留在磁盘，并在结束时统一列出，方便手动接手
+
+可选参数：
+
+| 参数 | 说明 |
+| :--- | :--- |
+| `-r`, `--recursive` | 启用套娃解压 |
+| `--max-depth N` | 最大递归深度，默认 2048 |
+| `--keep-nested-zips` | 保留已处理成功的中间压缩包 |
+
+另外：为避免误删文件，ZipCracker 不再清空输出目录，解压结果直接写入，同名文件按压缩包内条目正常覆盖。
 
 ### 超大字典怎么用
 

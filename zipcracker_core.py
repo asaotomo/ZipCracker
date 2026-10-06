@@ -5,6 +5,7 @@ from __future__ import annotations
 import binascii
 import builtins
 import bz2
+from collections import deque
 import copy
 import hashlib
 import importlib
@@ -56,7 +57,7 @@ CHARSET_LOWER = string.ascii_lowercase
 CHARSET_UPPER = string.ascii_uppercase
 CHARSET_SYMBOLS = string.punctuation
 OUT_DIR_DEFAULT = "unzipped_files"
-ZIPCRACKER_VERSION = "2.1.0"
+ZIPCRACKER_VERSION = "2.2.0"
 BKCRACK_REPO_URL = "https://github.com/kimci86/bkcrack"
 BKCRACK_RELEASES_API = "https://api.github.com/repos/kimci86/bkcrack/releases/latest"
 MSVC_REDIST_URL = "https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist"
@@ -143,6 +144,40 @@ class KpaTargetEntryInfo:
     file_size: int
     compress_size: int
     payload_len: int
+
+
+DEFAULT_NESTED_MAX_DEPTH = 2048
+NESTED_ARCHIVE_SUFFIXES = (".zip",)
+
+
+@dataclass
+class ZipCrackerOptions:
+    """run_cli 解析后的完整运行选项；套娃解压时每层会派生独立副本。"""
+
+    out_dir: str = OUT_DIR_DEFAULT
+    dict_path_or_mask_flag: Optional[str] = None
+    mask_value: Optional[str] = None
+    kpa_plain_path: Optional[str] = None
+    kpa_inner_name: Optional[str] = None
+    kpa_offset: Optional[int] = None
+    kpa_extra_specs: list[tuple[int, bytes]] = field(default_factory=list)
+    kpa_template_name: Optional[str] = None
+    use_bkcrack_recover: bool = False
+    recursive: bool = False
+    nested_max_depth: int = DEFAULT_NESTED_MAX_DEPTH
+    keep_nested_zips: bool = False
+    interactive: bool = True
+    basic_default_mode: bool = False
+
+
+@dataclass
+class CrackOutcome:
+    """单个压缩包的处理结果；extracted 为 True 时内容已写入 extracted_dir。"""
+
+    success: bool = False
+    extracted: bool = False
+    extracted_dir: Optional[str] = None
+    extracted_names: list[str] = field(default_factory=list)
 
 
 def loc(locale: str, zh: str, en: str) -> str:
@@ -2978,11 +3013,12 @@ def find_best_verification_entry(zf) -> Optional[str]:
 
 
 def _clean_and_create_outdir(out_dir: str) -> None:
-    if os.path.exists(out_dir):
-        try:
-            shutil.rmtree(out_dir)
-        except Exception:
-            pass
+    """仅确保输出目录存在。
+
+    历史实现会先 rmtree 整个输出目录；一旦输入 ZIP 或其他无关文件恰好位于
+    输出目录内，就会被连带删除。为避免误删用户文件，这里不再清理已有内容，
+    解压时同名文件按 ZIP 内条目正常覆盖。
+    """
     os.makedirs(out_dir, exist_ok=True)
 
 
@@ -3030,11 +3066,33 @@ def crack_crc(filename: str, crc: int, size: int, locale: str) -> None:
             break
 
 
-def get_crc(zip_file: str, zf: zipfile.ZipFile, locale: str) -> bool:
+def get_crc(
+    zip_file: str,
+    zf: zipfile.ZipFile,
+    locale: str,
+    *,
+    interactive: bool = True,
+) -> bool:
     """若存在 1～6 字节条目，询问是否执行短明文 CRC32 枚举恢复；全部条目均由此完成时跳过字典爆破。"""
     cracked_all = 0
     file_list = [name for name in zf.namelist() if not name.endswith("/")]
     if not file_list:
+        return False
+
+    short_entries = [
+        (name, zf.getinfo(name))
+        for name in file_list
+        if 0 < zf.getinfo(name).file_size <= 6
+    ]
+    if short_entries and (not interactive or not sys.stdin.isatty()):
+        count = len(short_entries)
+        print(
+            loc(
+                locale,
+                f"[*] 检测到 {count} 个短明文条目，但当前为非交互环境，跳过 CRC32 枚举询问，继续后续破解流程。",
+                f"[*] {count} short-plaintext entr{'y' if count == 1 else 'ies'} detected, but this session is non-interactive. Skipping the CRC32 enumeration prompt and continuing.",
+            )
+        )
         return False
 
     for filename in file_list:
@@ -4194,18 +4252,27 @@ def crack_password_with_mask(
 ) -> bool:
     token_groups, total_passwords = parse_mask(mask)
     if total_passwords > 100_000_000_000:
-        choice = input(
-            timestamped_prompt(
+        if not sys.stdin.isatty():
+            print(
                 loc(
                     locale,
-                    f"[!]警告：掩码 '{mask}' 将生成 {total_passwords:,} 种组合，可能需要极长时间。是否继续？ (y/n): ",
-                    f"[!] Warning: The mask '{mask}' will generate {total_passwords:,} combinations, which may take a very long time. Continue? (y/n): ",
+                    f"[*] 当前为非交互环境，跳过掩码组合数确认，直接继续攻击（共 {total_passwords:,} 种组合）。",
+                    f"[*] Non-interactive session: skipping the confirmation and continuing ({total_passwords:,} combinations).",
                 )
             )
-        )
-        if choice.strip().lower() != "y":
-            print(loc(locale, "[-] 用户已中止攻击。", "[-] Attack aborted by user."))
-            return False
+        else:
+            choice = input(
+                timestamped_prompt(
+                    loc(
+                        locale,
+                        f"[!]警告：掩码 '{mask}' 将生成 {total_passwords:,} 种组合，可能需要极长时间。是否继续？ (y/n): ",
+                        f"[!] Warning: The mask '{mask}' will generate {total_passwords:,} combinations, which may take a very long time. Continue? (y/n): ",
+                    )
+                )
+            )
+            if choice.strip().lower() != "y":
+                print(loc(locale, "[-] 用户已中止攻击。", "[-] Attack aborted by user."))
+                return False
 
     print(
         loc(
@@ -4487,6 +4554,10 @@ def print_usage(locale: str, script_name: str) -> None:
         raw_print(f"[*] Usage 6 (Partial KPA): python {script_name} enc.zip -kpa part.bin --kpa-offset 78 -x 0 4d5a")
         raw_print(f"[*] Usage 7 (Template KPA): python {script_name} enc.zip --kpa-template png [ -c image.png ]")
         raw_print(f"[*] Usage 8 (bkcrack only): python {script_name} enc.zip -kpa plain.txt [ -c inner ] --bkcrack")
+        raw_print("\n--- Nested ZIP (Recursive) ---")
+        raw_print(f"[*] Usage 9 (Nested): python {script_name} YourZipFile.zip -r [ --max-depth N ] [ --keep-nested-zips ]")
+        raw_print("         └─ After a crack/extract succeeds, scan the output for inner ZIPs and run the full pipeline on each layer.")
+        raw_print("         └─ --max-depth N caps recursion depth (default 2048); --keep-nested-zips keeps processed intermediate ZIPs (removed by default).")
         raw_print("\n--- Optional Arguments ---")
         raw_print(f"[*] Specify Output Directory: python {script_name} ... -o YourOutDir")
         raw_print("[*] KPA offset: --kpa-offset 78")
@@ -4511,12 +4582,667 @@ def print_usage(locale: str, script_name: str) -> None:
     raw_print(f"[*] 用法6(部分明文): python {script_name} enc.zip -kpa part.bin --kpa-offset 78 -x 0 4d5a")
     raw_print(f"[*] 用法7(模板KPA):  python {script_name} enc.zip --kpa-template png [ -c image.png ]")
     raw_print(f"[*] 用法8(仅bkcrack): python {script_name} enc.zip -kpa plain.txt [ -c inner ] --bkcrack")
+    raw_print("\n--- 套娃解压 (递归) ---")
+    raw_print(f"[*] 用法9(套娃解压): python {script_name} YourZipFile.zip -r [ --max-depth N ] [ --keep-nested-zips ]")
+    raw_print("         └─ 破解/解压成功后自动扫描结果中的嵌套 ZIP，对每一层重新执行完整流程（伪加密修复 → CRC32 → 字典/掩码）。")
+    raw_print("         └─ --max-depth N 限制最大递归深度（默认 2048）；--keep-nested-zips 保留处理过的中间压缩包（默认处理成功后删除）。")
     raw_print("\n--- 可选参数 ---")
     raw_print(f"[*] 指定输出目录:  python {script_name} ... -o YourOutDir")
     raw_print("[*] KPA 偏移量:    --kpa-offset 78")
     raw_print("[*] KPA 附加字节:  -x 0 4d5a  (可重复；也支持 0:4d5a)")
     raw_print(f"[*] KPA 模板:      --kpa-template {' | '.join(KPA_TEMPLATE_CHOICES)}")
     raw_print(f"[*] 帮助 / 版本:    python {script_name} --help | --version")
+
+
+def _is_path_inside(child: str, parent: str) -> bool:
+    child_abs = os.path.normcase(os.path.abspath(child))
+    parent_abs = os.path.normcase(os.path.abspath(parent))
+    if child_abs == parent_abs:
+        return False
+    try:
+        return os.path.commonpath([child_abs, parent_abs]) == parent_abs
+    except ValueError:
+        return False
+
+
+def resolve_extraction_destination(zip_file: str, out_dir: str) -> str:
+    """输入 ZIP 位于输出目录内时改用独立子目录，避免清理输出目录时误删输入文件。"""
+    if not _is_path_inside(zip_file, out_dir):
+        return out_dir
+    stem = os.path.splitext(os.path.basename(zip_file))[0]
+    safe_stem = re.sub(r"[^\w\-.]+", "_", stem)[:60] or "archive"
+    candidate = os.path.join(out_dir, f"{safe_stem}_extracted")
+    serial = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(out_dir, f"{safe_stem}_extracted_{serial}")
+        serial += 1
+    return candidate
+
+
+def make_nested_dest_dir(base_dir: str, counter: int, zip_path: str) -> str:
+    stem = os.path.splitext(os.path.basename(zip_path))[0]
+    safe_stem = re.sub(r"[^\w\-.]+", "_", stem)[:60] or "archive"
+    candidate = os.path.join(base_dir, f"nested_{counter:04d}_{safe_stem}")
+    serial = 1
+    while os.path.exists(candidate):
+        candidate = os.path.join(base_dir, f"nested_{counter:04d}_{safe_stem}_{serial}")
+        serial += 1
+    return candidate
+
+
+def is_probably_zip_file(path: str) -> bool:
+    if not path.lower().endswith(NESTED_ARCHIVE_SUFFIXES):
+        return False
+    try:
+        with open(path, "rb") as fp:
+            head = fp.read(4)
+    except OSError:
+        return False
+    return head.startswith(b"PK")
+
+
+def find_nested_zips(root_dir: str) -> list[str]:
+    found: list[str] = []
+    if not os.path.isdir(root_dir):
+        return found
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        dirnames.sort()
+        for filename in sorted(filenames):
+            if not filename.lower().endswith(NESTED_ARCHIVE_SUFFIXES):
+                continue
+            candidate = os.path.join(dirpath, filename)
+            if is_probably_zip_file(candidate):
+                found.append(candidate)
+    return found
+
+
+def build_nested_options(options: ZipCrackerOptions) -> ZipCrackerOptions:
+    """嵌套层复用字典/掩码设置；已知明文参数只对最外层有意义，逐层丢弃。"""
+    nested = copy.copy(options)
+    nested.interactive = False
+    nested.basic_default_mode = True
+    nested.kpa_plain_path = None
+    nested.kpa_inner_name = None
+    nested.kpa_offset = None
+    nested.kpa_extra_specs = []
+    nested.kpa_template_name = None
+    nested.use_bkcrack_recover = False
+    return nested
+
+
+def run_nested_extraction(
+    scan_root: str,
+    base_dir: str,
+    locale: str,
+    options: ZipCrackerOptions,
+    initial_zips: Optional[Sequence[str]] = None,
+) -> None:
+    """套娃解压：迭代扫描解压结果中的嵌套 ZIP，并对每一层复用完整破解流水线。
+
+    initial_zips 提供时只处理这批文件（本次解压产物），避免把输出目录中
+    历史遗留的压缩包误当作嵌套层。
+    """
+    max_depth = max(1, int(options.nested_max_depth))
+    if initial_zips is None:
+        seeds = find_nested_zips(scan_root)
+    else:
+        seeds = [
+            path
+            for path in initial_zips
+            if os.path.isfile(path)
+            and is_probably_zip_file(path)
+            and _is_path_inside(path, scan_root)
+        ]
+    pending: deque[tuple[str, int]] = deque((path, 1) for path in seeds)
+    if not pending:
+        print(
+            loc(
+                locale,
+                "[*] 套娃解压：解压结果中未发现嵌套 ZIP，流程结束。",
+                "[*] Nested extraction: no nested ZIP found in the extracted output. Done.",
+            )
+        )
+        return
+
+    nested_options = build_nested_options(options)
+    processed = 0
+    deepest_depth = 0
+    unresolved: list[str] = []
+    print(
+        loc(
+            locale,
+            f"[*] 套娃解压模式：发现 {len(pending)} 个嵌套 ZIP，开始逐层处理（最大深度 {max_depth}）...",
+            f"[*] Nested extraction mode: found {len(pending)} nested ZIP(s). Processing layer by layer (max depth {max_depth})...",
+        )
+    )
+
+    while pending:
+        zip_path, depth = pending.popleft()
+        if depth > max_depth:
+            unresolved.append(zip_path)
+            print(
+                loc(
+                    locale,
+                    f"[!] 已达到最大套娃深度 {max_depth}，跳过: {zip_path}",
+                    f"[!] Max nested depth {max_depth} reached, skipping: {zip_path}",
+                )
+            )
+            continue
+
+        processed += 1
+        deepest_depth = max(deepest_depth, depth)
+        try:
+            size_text = format_bytes(os.path.getsize(zip_path))
+        except OSError:
+            size_text = "?"
+        print(
+            loc(
+                locale,
+                f"\n[*] ===== 套娃第 {processed} 个包（深度 {depth}）: {zip_path}（{size_text}）=====",
+                f"\n[*] ===== Nested archive #{processed} (depth {depth}): {zip_path} ({size_text}) =====",
+            )
+        )
+
+        dest_dir = make_nested_dest_dir(base_dir, processed, zip_path)
+        layer_options = copy.copy(nested_options)
+        layer_options.out_dir = dest_dir
+        try:
+            outcome = run_crack_pipeline(zip_path, locale, layer_options)
+        except KeyboardInterrupt:
+            raise
+        except Exception as exc:
+            print(
+                loc(
+                    locale,
+                    f"[!] 处理该嵌套包时发生异常，已保留原文件: {exc}",
+                    f"[!] Error while processing this nested archive; the file was kept: {exc}",
+                )
+            )
+            unresolved.append(zip_path)
+            continue
+
+        if not outcome.success:
+            unresolved.append(zip_path)
+            print(
+                loc(
+                    locale,
+                    f"[-] 该嵌套包未能自动破解，已保留供手动分析: {zip_path}",
+                    f"[-] This nested archive was not cracked automatically; kept for manual analysis: {zip_path}",
+                )
+            )
+            continue
+
+        if not outcome.extracted:
+            print(
+                loc(
+                    locale,
+                    f"[*] 该嵌套包内容已恢复但未提取到磁盘，保留原文件: {zip_path}",
+                    f"[*] Contents of this nested archive were recovered but not written to disk; keeping the archive: {zip_path}",
+                )
+            )
+            continue
+
+        children = find_nested_zips(dest_dir)
+        for child in children:
+            pending.append((child, depth + 1))
+        if children:
+            print(
+                loc(
+                    locale,
+                    f"[+] 该层又发现 {len(children)} 个嵌套 ZIP，将继续向下处理。",
+                    f"[+] Found {len(children)} more nested ZIP(s) in this layer; they will be processed next.",
+                )
+            )
+
+        if options.keep_nested_zips:
+            continue
+        try:
+            os.remove(zip_path)
+        except OSError as exc:
+            print(
+                loc(
+                    locale,
+                    f"[!] 清理已处理的嵌套包失败（保留文件）: {exc}",
+                    f"[!] Failed to remove the processed nested archive (file kept): {exc}",
+                )
+            )
+            continue
+        parent_dir = os.path.dirname(os.path.abspath(zip_path))
+        if _is_path_inside(parent_dir, base_dir):
+            try:
+                os.rmdir(parent_dir)
+            except OSError:
+                pass
+
+    print(
+        loc(
+            locale,
+            f"\n[*] 套娃解压结束：共处理 {processed} 个嵌套包，最大深度 {deepest_depth}。",
+            f"\n[*] Nested extraction finished: {processed} nested archive(s) processed, deepest level {deepest_depth}.",
+        )
+    )
+    if unresolved:
+        print(
+            loc(
+                locale,
+                f"[!] 以下 {len(unresolved)} 个嵌套包未能自动处理，已保留在磁盘：",
+                f"[!] The following {len(unresolved)} nested archive(s) could not be handled automatically and were kept on disk:",
+            )
+        )
+        for path in unresolved:
+            print(f"     - {path}")
+    else:
+        print(
+            loc(
+                locale,
+                "[+] 所有嵌套包均已处理完毕。",
+                "[+] All nested archives were processed successfully.",
+            )
+        )
+
+
+def run_crack_pipeline(
+    zip_file: str, locale: str, options: ZipCrackerOptions
+) -> CrackOutcome:
+    """对单个 ZIP 执行完整破解流水线（伪加密修复 → CRC32 → KPA → 字典/掩码/模板）。"""
+    outcome = CrackOutcome()
+    out_dir = resolve_extraction_destination(zip_file, options.out_dir)
+    dict_path_or_mask_flag = options.dict_path_or_mask_flag
+    mask_value = options.mask_value
+    kpa_plain_path = options.kpa_plain_path
+    kpa_inner_name = options.kpa_inner_name
+    kpa_offset = options.kpa_offset
+    kpa_extra_specs = options.kpa_extra_specs
+    kpa_template_name = options.kpa_template_name
+    use_bkcrack_recover = options.use_bkcrack_recover
+    basic_default_mode = options.basic_default_mode
+
+    if not os.path.exists(zip_file):
+        print(
+            loc(
+                locale,
+                f"[!]错误: 文件 '{zip_file}' 未找到。",
+                f"[!] Error: File '{zip_file}' not found.",
+            )
+        )
+        return outcome
+
+    kpa_requested = bool(kpa_plain_path or kpa_template_name or kpa_extra_specs)
+
+    if use_bkcrack_recover and not kpa_requested:
+        print(
+            loc(
+                locale,
+                "[!] --bkcrack 需与已知明文参数同时使用，例如 -kpa / --kpa-template / -x。",
+                "[!] --bkcrack must be used together with known-plaintext arguments such as -kpa / --kpa-template / -x.",
+            )
+        )
+        return outcome
+
+    if not kpa_requested and kpa_offset is not None:
+        print(
+            loc(
+                locale,
+                "[!] --kpa-offset 需要与 -kpa 或 --kpa-template 一起使用。",
+                "[!] --kpa-offset must be used together with -kpa or --kpa-template.",
+            )
+        )
+        return outcome
+
+    if kpa_plain_path and not os.path.isfile(kpa_plain_path):
+        print(
+            loc(
+                locale,
+                f"[!] 已知明文文件不存在: {kpa_plain_path}",
+                f"[!] Known plaintext file does not exist: {kpa_plain_path}",
+            )
+        )
+        return outcome
+
+    archive_profile = collect_archive_encryption_profile(zip_file)
+    if options.interactive:
+        pyzipper_ready = offer_pyzipper_install(locale, zip_file)
+    else:
+        pyzipper_ready = HAS_PYZIPPER
+    for line in archive_encryption_notice_lines(
+        locale,
+        archive_profile,
+        pyzipper_ready=pyzipper_ready,
+    ):
+        print(line)
+    if options.interactive and not pyzipper_ready and not HAS_PYZIPPER:
+        print(
+            loc(
+                locale,
+                "[*] 当前仍未启用 pyzipper，因此如果目标条目使用 AES，加密验证或解压可能无法正常完成。",
+                "[*] pyzipper is still unavailable, so AES-encrypted target entries may not verify or extract correctly.",
+            )
+        )
+
+    is_truly_encrypted = False
+    if is_zip_encrypted(zip_file):
+        print(
+            loc(
+                locale,
+                f"[!] 系统检测到 {zip_file} 的加密标志位已开启，正在尝试进行伪加密修复...",
+                f"[!] Encryption flag detected in {zip_file}. Attempting pseudo-encryption repair...",
+            )
+        )
+        fixed_zip_name = zip_file + ".fixed.tmp"
+        try:
+            fix_zip_encrypted(zip_file, fixed_zip_name)
+            with zipfile.ZipFile(fixed_zip_name) as fixed_zf:
+                fixed_zf.testzip()
+
+            print(
+                loc(
+                    locale,
+                    f"[*] 伪加密修复成功！文件 '{zip_file}' 无需密码。",
+                    f"[*] Pseudo-encryption fixed successfully. File '{zip_file}' does not require a password.",
+                )
+            )
+            _clean_and_create_outdir(out_dir)
+            with zipfile.ZipFile(fixed_zip_name) as fixed_zf:
+                fixed_zf.extractall(path=out_dir)
+                names = fixed_zf.namelist()
+            print(
+                loc(
+                    locale,
+                    f"[*] 系统已为您自动提取出 {len(names)} 个文件到 '{out_dir}' 文件夹中: {names}",
+                    f"[*] Successfully extracted {len(names)} file(s) to '{out_dir}': {names}",
+                )
+            )
+            outcome.success = True
+            outcome.extracted = True
+            outcome.extracted_dir = out_dir
+            outcome.extracted_names = list(names)
+            return outcome
+        except Exception:
+            is_truly_encrypted = True
+            print(
+                loc(
+                    locale,
+                    "[+] 修复尝试失败，该文件为真加密，准备进行暴力破解。",
+                    "[+] Repair attempt failed. This is a truly encrypted ZIP. Preparing brute-force attack.",
+                )
+            )
+        finally:
+            if os.path.exists(fixed_zip_name):
+                try:
+                    os.remove(fixed_zip_name)
+                except OSError:
+                    pass
+
+    if not is_zip_encrypted(zip_file):
+        if options.recursive:
+            try:
+                _clean_and_create_outdir(out_dir)
+                with zipfile.ZipFile(zip_file) as zf:
+                    zf.extractall(path=out_dir)
+                    names = zf.namelist()
+                print(
+                    loc(
+                        locale,
+                        f"[*] 压缩包未加密，已直接提取 {len(names)} 个文件到 '{out_dir}'，套娃模式将继续扫描其中的嵌套 ZIP...",
+                        f"[*] The archive is not encrypted. Extracted {len(names)} file(s) to '{out_dir}'. Nested mode will scan it for inner ZIPs...",
+                    )
+                )
+                outcome.success = True
+                outcome.extracted = True
+                outcome.extracted_dir = out_dir
+                outcome.extracted_names = list(names)
+                return outcome
+            except Exception as exc:
+                print(
+                    loc(
+                        locale,
+                        f"[!] 解压未加密压缩包失败: {exc}",
+                        f"[!] Failed to extract the unencrypted archive: {exc}",
+                    )
+                )
+                return outcome
+        print(
+            loc(
+                locale,
+                f"[!] 系统检测到 {zip_file} 不是一个加密的ZIP文件，您可以直接解压！",
+                f"[!] {zip_file} is not an encrypted ZIP file. You can extract it directly.",
+            )
+        )
+        outcome.success = True
+        return outcome
+
+    if is_truly_encrypted:
+        print(
+            loc(
+                locale,
+                "[+] 开始对真加密文件进行破解...",
+                "[+] Starting the cracking workflow for the encrypted ZIP...",
+            )
+        )
+        try:
+            with zipfile.ZipFile(zip_file) as zf:
+                if not kpa_plain_path and not use_bkcrack_recover:
+                    # 短明文 CRC32 枚举恢复；若包内条目全部由此完成则直接结束流程
+                    if get_crc(zip_file, zf, locale, interactive=options.interactive):
+                        outcome.success = True
+                        return outcome
+        except zipfile.BadZipFile:
+            print(
+                loc(
+                    locale,
+                    f"[!] '{zip_file}' 可能不是一个有效的 ZIP 文件或已损坏。",
+                    f"[!] '{zip_file}' may not be a valid ZIP file or it may be corrupted.",
+                )
+            )
+            return outcome
+
+        kpa_ctx = None
+        kpa_inner_resolved = None
+        kpa_attempts: list[KnownPlaintextAttempt] = []
+        partial_kpa_mode = False
+        if kpa_requested:
+            try:
+                kpa_inner_resolved, kpa_attempts, partial_kpa_mode = (
+                    build_known_plaintext_attempts(
+                        zip_file,
+                        kpa_plain_path,
+                        locale,
+                        preferred_entry=kpa_inner_name,
+                        plain_offset=kpa_offset,
+                        extra_specs=kpa_extra_specs,
+                        template_name=kpa_template_name,
+                    )
+                )
+                if not partial_kpa_mode and kpa_plain_path:
+                    kpa_ctx = prepare_kpa_context(
+                        zip_file,
+                        kpa_inner_resolved,
+                        kpa_plain_path,
+                        locale,
+                    )
+                elif kpa_attempts:
+                    first_attempt = kpa_attempts[0]
+                    total_known, max_contig = merge_known_plaintext_ranges(
+                        first_attempt.plain_offset,
+                        len(first_attempt.plain_source["plaintext_bytes"])
+                        if first_attempt.plain_source
+                        else 0,
+                        first_attempt.extra_specs,
+                    )
+                    print(
+                        loc(
+                            locale,
+                            f"[+] 已知明文部分模式: 条目 '{kpa_inner_resolved}'，偏移 {first_attempt.plain_offset}，附加字节 {len(first_attempt.extra_specs)} 组，累计已知 {total_known} 字节，最大连续片段 {max_contig} 字节。",
+                            f"[+] Partial known-plaintext mode: entry '{kpa_inner_resolved}', offset {first_attempt.plain_offset}, {len(first_attempt.extra_specs)} extra-byte group(s), {total_known} known bytes total, longest contiguous fragment {max_contig} bytes.",
+                        )
+                    )
+                    if kpa_template_name:
+                        print(
+                            loc(
+                                locale,
+                                f"[*] 当前已启用模板: {kpa_template_name}（将自动尝试常见头部/偏移候选）。",
+                                f"[*] Enabled KPA template: {kpa_template_name} (common header/offset candidates will be tried automatically).",
+                            )
+                        )
+            except Exception as exc:
+                print(
+                    loc(
+                        locale,
+                        f"[!] 已知明文模式初始化失败: {exc}",
+                        f"[!] Failed to initialize known-plaintext mode: {exc}",
+                    )
+                )
+                return outcome
+
+            try:
+                bk_tool = find_bkcrack_executable()
+                if not bk_tool:
+                    bk_tool = offer_bkcrack_install(
+                        locale,
+                        required=bool(use_bkcrack_recover or partial_kpa_mode),
+                    )
+
+                if use_bkcrack_recover:
+                    if run_bkcrack_known_plaintext_attempts(
+                        zip_file,
+                        kpa_attempts,
+                        out_dir,
+                        locale,
+                        bk_tool,
+                    ):
+                        outcome.success = True
+                        outcome.extracted = True
+                        outcome.extracted_dir = out_dir
+                    return outcome
+
+                if bk_tool:
+                    version = get_bkcrack_version(bk_tool)
+                    print(
+                        loc(
+                            locale,
+                            f"[*] 已检测到 bkcrack{f'（{version}）' if version else ''}，尝试无字典已知明文恢复；失败将自动继续字典/掩码。",
+                            f"[*] bkcrack detected{f' ({version})' if version else ''}. Trying dictionary-free known-plaintext recovery first; dictionary/mask attacks will continue on failure.",
+                        )
+                    )
+                    if run_bkcrack_known_plaintext_attempts(
+                        zip_file,
+                        kpa_attempts,
+                        out_dir,
+                        locale,
+                        bk_tool,
+                    ):
+                        outcome.success = True
+                        outcome.extracted = True
+                        outcome.extracted_dir = out_dir
+                        return outcome
+                    print(
+                        loc(
+                            locale,
+                            "[*] bkcrack 未恢复成功，继续字典/掩码。",
+                            "[*] bkcrack did not recover the archive. Continuing with dictionary/mask attacks.",
+                        )
+                    )
+                elif partial_kpa_mode:
+                    print(
+                        loc(
+                            locale,
+                            "[*] 当前部分明文 / 模板 KPA 依赖 bkcrack；已跳过这一步，继续字典/掩码。",
+                            "[*] Partial/template known-plaintext mode requires bkcrack. Skipping it and continuing with dictionary/mask attacks.",
+                        )
+                    )
+                else:
+                    print(
+                        loc(
+                            locale,
+                            "[*] 未检测到 bkcrack，跳过无字典恢复；继续字典/掩码。",
+                            "[*] bkcrack not found. Skipping dictionary-free recovery and continuing with dictionary/mask attacks.",
+                        )
+                    )
+            finally:
+                cleanup_known_plaintext_attempts(kpa_attempts)
+
+        verifier = PasswordVerifier(zip_file, **(kpa_ctx or {}))
+
+        if dict_path_or_mask_flag == "-m":
+            if not mask_value:
+                print(
+                    loc(
+                        locale,
+                        "[!] 错误: 未提供掩码字符串。",
+                        "[!] Error: No mask string was provided.",
+                    )
+                )
+                return outcome
+            if crack_password_with_mask(
+                zip_file, mask_value, verifier, locale, out_dir
+            ):
+                outcome.success = True
+                outcome.extracted = True
+                outcome.extracted_dir = out_dir
+            return outcome
+
+        print(
+            loc(
+                locale,
+                "[+] 系统开始进行字典暴力破解······",
+                "[+] Starting dictionary brute-force attack...",
+            )
+        )
+
+        if dict_path_or_mask_flag:
+            if crack_password_with_file_or_dir(
+                zip_file,
+                dict_path_or_mask_flag,
+                verifier,
+                locale,
+                out_dir,
+            ):
+                outcome.success = True
+                outcome.extracted = True
+                outcome.extracted_dir = out_dir
+            return outcome
+
+        found = False
+        if os.path.exists("password_list.txt"):
+            found = crack_password_with_file(
+                zip_file,
+                "password_list.txt",
+                verifier,
+                locale,
+                out_dir,
+            )
+        else:
+            print(
+                loc(
+                    locale,
+                    "[!] 未找到内置字典 password_list.txt，将直接尝试纯数字字典。",
+                    "[!] Built-in dictionary 'password_list.txt' was not found. Proceeding directly to the numeric dictionary.",
+                )
+            )
+
+        if found:
+            outcome.success = True
+            outcome.extracted = True
+            outcome.extracted_dir = out_dir
+            return outcome
+        if crack_with_generated_numeric_dict(zip_file, verifier, locale, out_dir):
+            outcome.success = True
+            outcome.extracted = True
+            outcome.extracted_dir = out_dir
+            return outcome
+        if basic_default_mode and offer_template_kpa_after_standard_failures(
+            zip_file,
+            out_dir,
+            locale,
+        ):
+            outcome.success = True
+            outcome.extracted = True
+            outcome.extracted_dir = out_dir
+            return outcome
+        return outcome
+
+    outcome.success = True
+    return outcome
 
 
 def run_cli(locale: str = "zh") -> int:
@@ -4534,16 +5260,7 @@ def run_cli(locale: str = "zh") -> int:
             return 0
 
         zip_file = sys.argv[1]
-        basic_default_mode = len(sys.argv) == 2
-        out_dir = OUT_DIR_DEFAULT
-        dict_path_or_mask_flag = None
-        mask_value = None
-        kpa_plain_path = None
-        kpa_inner_name = None
-        kpa_offset = None
-        kpa_extra_specs: list[tuple[int, bytes]] = []
-        kpa_template_name = None
-        use_bkcrack_recover = False
+        options = ZipCrackerOptions()
 
         index = 2
         while index < len(sys.argv):
@@ -4558,7 +5275,7 @@ def run_cli(locale: str = "zh") -> int:
                         )
                     )
                     return 1
-                out_dir = sys.argv[index + 1]
+                options.out_dir = sys.argv[index + 1]
                 index += 2
             elif arg in ("-m", "--mask"):
                 if index + 1 >= len(sys.argv):
@@ -4570,8 +5287,8 @@ def run_cli(locale: str = "zh") -> int:
                         )
                     )
                     return 1
-                dict_path_or_mask_flag = "-m"
-                mask_value = sys.argv[index + 1]
+                options.dict_path_or_mask_flag = "-m"
+                options.mask_value = sys.argv[index + 1]
                 index += 2
             elif arg in ("-kpa", "--kpa"):
                 if index + 1 >= len(sys.argv):
@@ -4583,7 +5300,7 @@ def run_cli(locale: str = "zh") -> int:
                         )
                     )
                     return 1
-                kpa_plain_path = sys.argv[index + 1]
+                options.kpa_plain_path = sys.argv[index + 1]
                 index += 2
             elif arg in ("-c", "--cipher-entry"):
                 if index + 1 >= len(sys.argv):
@@ -4595,7 +5312,7 @@ def run_cli(locale: str = "zh") -> int:
                         )
                     )
                     return 1
-                kpa_inner_name = sys.argv[index + 1]
+                options.kpa_inner_name = sys.argv[index + 1]
                 index += 2
             elif arg == "--kpa-offset":
                 if index + 1 >= len(sys.argv):
@@ -4608,7 +5325,7 @@ def run_cli(locale: str = "zh") -> int:
                     )
                     return 1
                 try:
-                    kpa_offset = parse_kpa_offset(sys.argv[index + 1], locale)
+                    options.kpa_offset = parse_kpa_offset(sys.argv[index + 1], locale)
                 except ValueError as exc:
                     print(loc(locale, f"[!] 错误: {exc}", f"[!] Error: {exc}"))
                     return 1
@@ -4643,7 +5360,7 @@ def run_cli(locale: str = "zh") -> int:
                     hex_text = sys.argv[index + 2]
                     step = 3
                 try:
-                    kpa_extra_specs.append(
+                    options.kpa_extra_specs.append(
                         parse_kpa_extra_spec(offset_text, hex_text, locale)
                     )
                 except ValueError as exc:
@@ -4660,8 +5377,10 @@ def run_cli(locale: str = "zh") -> int:
                         )
                     )
                     return 1
-                kpa_template_name = normalize_kpa_template_name(sys.argv[index + 1])
-                if kpa_template_name not in KPA_TEMPLATE_CHOICES:
+                options.kpa_template_name = normalize_kpa_template_name(
+                    sys.argv[index + 1]
+                )
+                if options.kpa_template_name not in KPA_TEMPLATE_CHOICES:
                     print(
                         loc(
                             locale,
@@ -4672,353 +5391,77 @@ def run_cli(locale: str = "zh") -> int:
                     return 1
                 index += 2
             elif arg == "--bkcrack":
-                use_bkcrack_recover = True
+                options.use_bkcrack_recover = True
                 index += 1
-            else:
-                if dict_path_or_mask_flag is None:
-                    dict_path_or_mask_flag = arg
+            elif arg in ("-r", "--recursive"):
+                options.recursive = True
                 index += 1
-
-        if not os.path.exists(zip_file):
-            print(
-                loc(
-                    locale,
-                    f"[!]错误: 文件 '{zip_file}' 未找到。",
-                    f"[!] Error: File '{zip_file}' not found.",
-                )
-            )
-            return 1
-
-        kpa_requested = bool(kpa_plain_path or kpa_template_name or kpa_extra_specs)
-
-        if use_bkcrack_recover and not kpa_requested:
-            print(
-                loc(
-                    locale,
-                    "[!] --bkcrack 需与已知明文参数同时使用，例如 -kpa / --kpa-template / -x。",
-                    "[!] --bkcrack must be used together with known-plaintext arguments such as -kpa / --kpa-template / -x.",
-                )
-            )
-            return 1
-
-        if not kpa_requested and kpa_offset is not None:
-            print(
-                loc(
-                    locale,
-                    "[!] --kpa-offset 需要与 -kpa 或 --kpa-template 一起使用。",
-                    "[!] --kpa-offset must be used together with -kpa or --kpa-template.",
-                )
-            )
-            return 1
-
-        if kpa_plain_path and not os.path.isfile(kpa_plain_path):
-            print(
-                loc(
-                    locale,
-                    f"[!] 已知明文文件不存在: {kpa_plain_path}",
-                    f"[!] Known plaintext file does not exist: {kpa_plain_path}",
-                )
-            )
-            return 1
-
-        archive_profile = collect_archive_encryption_profile(zip_file)
-        pyzipper_ready = offer_pyzipper_install(locale, zip_file)
-        for line in archive_encryption_notice_lines(
-            locale,
-            archive_profile,
-            pyzipper_ready=pyzipper_ready,
-        ):
-            print(line)
-        if not pyzipper_ready and not HAS_PYZIPPER:
-            print(
-                loc(
-                    locale,
-                    "[*] 当前仍未启用 pyzipper，因此如果目标条目使用 AES，加密验证或解压可能无法正常完成。",
-                    "[*] pyzipper is still unavailable, so AES-encrypted target entries may not verify or extract correctly.",
-                )
-            )
-
-        is_truly_encrypted = False
-        if is_zip_encrypted(zip_file):
-            print(
-                loc(
-                    locale,
-                    f"[!] 系统检测到 {zip_file} 的加密标志位已开启，正在尝试进行伪加密修复...",
-                    f"[!] Encryption flag detected in {zip_file}. Attempting pseudo-encryption repair...",
-                )
-            )
-            fixed_zip_name = zip_file + ".fixed.tmp"
-            try:
-                fix_zip_encrypted(zip_file, fixed_zip_name)
-                with zipfile.ZipFile(fixed_zip_name) as fixed_zf:
-                    fixed_zf.testzip()
-
-                print(
-                    loc(
-                        locale,
-                        f"[*] 伪加密修复成功！文件 '{zip_file}' 无需密码。",
-                        f"[*] Pseudo-encryption fixed successfully. File '{zip_file}' does not require a password.",
-                    )
-                )
-                _clean_and_create_outdir(out_dir)
-                with zipfile.ZipFile(fixed_zip_name) as fixed_zf:
-                    fixed_zf.extractall(path=out_dir)
-                    names = fixed_zf.namelist()
-                print(
-                    loc(
-                        locale,
-                        f"[*] 系统已为您自动提取出 {len(names)} 个文件到 '{out_dir}' 文件夹中: {names}",
-                        f"[*] Successfully extracted {len(names)} file(s) to '{out_dir}': {names}",
-                    )
-                )
-                return 0
-            except Exception:
-                is_truly_encrypted = True
-                print(
-                    loc(
-                        locale,
-                        "[+] 修复尝试失败，该文件为真加密，准备进行暴力破解。",
-                        "[+] Repair attempt failed. This is a truly encrypted ZIP. Preparing brute-force attack.",
-                    )
-                )
-            finally:
-                if os.path.exists(fixed_zip_name):
-                    try:
-                        os.remove(fixed_zip_name)
-                    except OSError:
-                        pass
-
-        if not is_zip_encrypted(zip_file):
-            print(
-                loc(
-                    locale,
-                    f"[!] 系统检测到 {zip_file} 不是一个加密的ZIP文件，您可以直接解压！",
-                    f"[!] {zip_file} is not an encrypted ZIP file. You can extract it directly.",
-                )
-            )
-            return 0
-
-        if is_truly_encrypted:
-            print(
-                loc(
-                    locale,
-                    "[+] 开始对真加密文件进行破解...",
-                    "[+] Starting the cracking workflow for the encrypted ZIP...",
-                )
-            )
-            try:
-                with zipfile.ZipFile(zip_file) as zf:
-                    if not kpa_plain_path and not use_bkcrack_recover:
-                        # 短明文 CRC32 枚举恢复；若包内条目全部由此完成则直接结束流程
-                        if get_crc(zip_file, zf, locale):
-                            return 0
-            except zipfile.BadZipFile:
-                print(
-                    loc(
-                        locale,
-                        f"[!] '{zip_file}' 可能不是一个有效的 ZIP 文件或已损坏。",
-                        f"[!] '{zip_file}' may not be a valid ZIP file or it may be corrupted.",
-                    )
-                )
-                return 1
-
-            kpa_ctx = None
-            kpa_inner_resolved = None
-            kpa_attempts: list[KnownPlaintextAttempt] = []
-            partial_kpa_mode = False
-            if kpa_requested:
-                try:
-                    kpa_inner_resolved, kpa_attempts, partial_kpa_mode = (
-                        build_known_plaintext_attempts(
-                            zip_file,
-                            kpa_plain_path,
-                            locale,
-                            preferred_entry=kpa_inner_name,
-                            plain_offset=kpa_offset,
-                            extra_specs=kpa_extra_specs,
-                            template_name=kpa_template_name,
-                        )
-                    )
-                    if not partial_kpa_mode and kpa_plain_path:
-                        kpa_ctx = prepare_kpa_context(
-                            zip_file,
-                            kpa_inner_resolved,
-                            kpa_plain_path,
-                            locale,
-                        )
-                    elif kpa_attempts:
-                        first_attempt = kpa_attempts[0]
-                        total_known, max_contig = merge_known_plaintext_ranges(
-                            first_attempt.plain_offset,
-                            len(first_attempt.plain_source["plaintext_bytes"])
-                            if first_attempt.plain_source
-                            else 0,
-                            first_attempt.extra_specs,
-                        )
-                        print(
-                            loc(
-                                locale,
-                                f"[+] 已知明文部分模式: 条目 '{kpa_inner_resolved}'，偏移 {first_attempt.plain_offset}，附加字节 {len(first_attempt.extra_specs)} 组，累计已知 {total_known} 字节，最大连续片段 {max_contig} 字节。",
-                                f"[+] Partial known-plaintext mode: entry '{kpa_inner_resolved}', offset {first_attempt.plain_offset}, {len(first_attempt.extra_specs)} extra-byte group(s), {total_known} known bytes total, longest contiguous fragment {max_contig} bytes.",
-                            )
-                        )
-                        if kpa_template_name:
-                            print(
-                                loc(
-                                    locale,
-                                    f"[*] 当前已启用模板: {kpa_template_name}（将自动尝试常见头部/偏移候选）。",
-                                    f"[*] Enabled KPA template: {kpa_template_name} (common header/offset candidates will be tried automatically).",
-                                )
-                            )
-                except Exception as exc:
+            elif arg == "--max-depth":
+                if index + 1 >= len(sys.argv):
                     print(
                         loc(
                             locale,
-                            f"[!] 已知明文模式初始化失败: {exc}",
-                            f"[!] Failed to initialize known-plaintext mode: {exc}",
+                            "[!] 错误: --max-depth 后应提供一个正整数。",
+                            "[!] Error: --max-depth requires a positive integer.",
                         )
                     )
                     return 1
-
                 try:
-                    bk_tool = find_bkcrack_executable()
-                    if not bk_tool:
-                        bk_tool = offer_bkcrack_install(
-                            locale,
-                            required=bool(use_bkcrack_recover or partial_kpa_mode),
-                        )
-
-                    if use_bkcrack_recover:
-                        return (
-                            0
-                            if run_bkcrack_known_plaintext_attempts(
-                                zip_file,
-                                kpa_attempts,
-                                out_dir,
-                                locale,
-                                bk_tool,
-                            )
-                            else 1
-                        )
-
-                    if bk_tool:
-                        version = get_bkcrack_version(bk_tool)
-                        print(
-                            loc(
-                                locale,
-                                f"[*] 已检测到 bkcrack{f'（{version}）' if version else ''}，尝试无字典已知明文恢复；失败将自动继续字典/掩码。",
-                                f"[*] bkcrack detected{f' ({version})' if version else ''}. Trying dictionary-free known-plaintext recovery first; dictionary/mask attacks will continue on failure.",
-                            )
-                        )
-                        if run_bkcrack_known_plaintext_attempts(
-                            zip_file,
-                            kpa_attempts,
-                            out_dir,
-                            locale,
-                            bk_tool,
-                        ):
-                            return 0
-                        print(
-                            loc(
-                                locale,
-                                "[*] bkcrack 未恢复成功，继续字典/掩码。",
-                                "[*] bkcrack did not recover the archive. Continuing with dictionary/mask attacks.",
-                            )
-                        )
-                    elif partial_kpa_mode:
-                        print(
-                            loc(
-                                locale,
-                                "[*] 当前部分明文 / 模板 KPA 依赖 bkcrack；已跳过这一步，继续字典/掩码。",
-                                "[*] Partial/template known-plaintext mode requires bkcrack. Skipping it and continuing with dictionary/mask attacks.",
-                            )
-                        )
-                    else:
-                        print(
-                            loc(
-                                locale,
-                                "[*] 未检测到 bkcrack，跳过无字典恢复；继续字典/掩码。",
-                                "[*] bkcrack not found. Skipping dictionary-free recovery and continuing with dictionary/mask attacks.",
-                            )
-                        )
-                finally:
-                    cleanup_known_plaintext_attempts(kpa_attempts)
-
-            verifier = PasswordVerifier(zip_file, **(kpa_ctx or {}))
-
-            if dict_path_or_mask_flag == "-m":
-                if not mask_value:
+                    depth_value = int(sys.argv[index + 1])
+                except ValueError:
                     print(
                         loc(
                             locale,
-                            "[!] 错误: 未提供掩码字符串。",
-                            "[!] Error: No mask string was provided.",
+                            f"[!] 错误: 无效的套娃递归深度: {sys.argv[index + 1]}",
+                            f"[!] Error: Invalid nested recursion depth: {sys.argv[index + 1]}",
                         )
                     )
                     return 1
-                return (
-                    0
-                    if crack_password_with_mask(
-                        zip_file, mask_value, verifier, locale, out_dir
+                if depth_value < 1:
+                    print(
+                        loc(
+                            locale,
+                            "[!] 错误: 套娃递归深度必须 ≥ 1。",
+                            "[!] Error: Nested recursion depth must be >= 1.",
+                        )
                     )
-                    else 1
-                )
-
-            print(
-                loc(
-                    locale,
-                    "[+] 系统开始进行字典暴力破解······",
-                    "[+] Starting dictionary brute-force attack...",
-                )
-            )
-
-            if dict_path_or_mask_flag:
-                return (
-                    0
-                    if crack_password_with_file_or_dir(
-                        zip_file,
-                        dict_path_or_mask_flag,
-                        verifier,
-                        locale,
-                        out_dir,
-                    )
-                    else 1
-                )
-
-            found = False
-            if os.path.exists("password_list.txt"):
-                found = crack_password_with_file(
-                    zip_file,
-                    "password_list.txt",
-                    verifier,
-                    locale,
-                    out_dir,
-                )
+                    return 1
+                options.nested_max_depth = depth_value
+                index += 2
+            elif arg == "--keep-nested-zips":
+                options.keep_nested_zips = True
+                index += 1
             else:
-                print(
-                    loc(
-                        locale,
-                        "[!] 未找到内置字典 password_list.txt，将直接尝试纯数字字典。",
-                        "[!] Built-in dictionary 'password_list.txt' was not found. Proceeding directly to the numeric dictionary.",
-                    )
-                )
+                if options.dict_path_or_mask_flag is None:
+                    options.dict_path_or_mask_flag = arg
+                index += 1
 
-            if found:
-                return 0
-            numeric_found = crack_with_generated_numeric_dict(
-                zip_file, verifier, locale, out_dir
+        kpa_requested = bool(
+            options.kpa_plain_path
+            or options.kpa_template_name
+            or options.kpa_extra_specs
+        )
+        options.basic_default_mode = (
+            options.dict_path_or_mask_flag is None and not kpa_requested
+        )
+
+        outcome = run_crack_pipeline(zip_file, locale, options)
+        if outcome.success and outcome.extracted and options.recursive:
+            initial_zips = None
+            if outcome.extracted_names:
+                extracted_root = outcome.extracted_dir or options.out_dir
+                initial_zips = [
+                    os.path.join(extracted_root, name)
+                    for name in outcome.extracted_names
+                ]
+            run_nested_extraction(
+                scan_root=outcome.extracted_dir or options.out_dir,
+                base_dir=options.out_dir,
+                locale=locale,
+                options=options,
+                initial_zips=initial_zips,
             )
-            if numeric_found:
-                return 0
-            if basic_default_mode and offer_template_kpa_after_standard_failures(
-                zip_file,
-                out_dir,
-                locale,
-            ):
-                return 0
-            return 1
-
-        return 0
+        return 0 if outcome.success else 1
 
     except FileNotFoundError:
         target = sys.argv[1] if len(sys.argv) > 1 else ""
