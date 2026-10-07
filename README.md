@@ -1,8 +1,12 @@
-### ZipCracker（新版本） —— 使用说明
+### ZipCracker v2.2.0 —— 使用说明
 
 [English](./README_EN.md)
 
-**ZipCracker** 是 **Hx0 战队**开发的一款**面向 ZIP 压缩包的综合破解与恢复工具**，非常适用于新手拿来解决 **CTF 常见 ZIP 题型**，也适用于经授权的**安全测试**和**自有加密备份恢复**场景。它将**伪加密识别与修复、字典爆破、掩码猜解、短明文 CRC32 枚举、已知明文攻击**等常见手段整合为一条完整流程，支持**超大字典快速加载、多线程高并发调度**，并在命中后**自动解压**，帮助用户更**高效**地完成 ZIP 分析与恢复。
+**稳定版本：** [v2.2.0](https://github.com/asaotomo/ZipCracker/releases/tag/v2.2.0) · [下载完整 ZIP 包](https://github.com/asaotomo/ZipCracker/releases/download/v2.2.0/ZipCracker-v2.2.0.zip) · [更新日志](./CHANGELOG.md)
+
+**ZipCracker** 是 **Hx0 战队**开发的一款**面向 ZIP 压缩包的综合破解与恢复工具**，非常适用于新手拿来解决 **CTF 常见 ZIP 题型**，也适用于经授权的**安全测试**和**自有加密备份恢复**场景。它将**伪加密识别与修复、字典爆破、掩码猜解、短明文 CRC32 枚举、已知明文攻击、套娃 ZIP 逐层恢复**等常见手段整合为一条完整流程，支持**超大字典快速加载、多线程高并发调度**，并在命中后**自动解压**，帮助用户更**高效**地完成 ZIP 分析与恢复。
+
+**v2.2.0 更新：** 新增 `-r` 套娃解压；完整提取成功后才清理中间包；输出同名旧文件先备份；修复 Windows 中文输出、内置字典查找和 CRC32 恢复结果判断等问题。原有命令继续可用。
 
 <img width="3020" height="1574" alt="image" src="https://github.com/user-attachments/assets/240d75b0-16dd-4777-9143-38916fd7253b" />
 
@@ -38,11 +42,13 @@ python3 ZipCracker.py test02.zip
 python3 ZipCracker.py test05.zip -kpa test05_plain.txt
 
 # 4. 套娃解压（递归处理嵌套压缩包）
-python3 ZipCracker.py 1000.zip -r
+python3 ZipCracker.py outer.zip -r
 
 # 5. 超大字典推荐写法
 ZIPCRACKER_SKIP_DICT_COUNT=1 python3 ZipCracker.py target.zip huge_dict.txt
 ```
+
+下载并解压完整 ZIP 包后，在其中的 `ZipCracker-v2.2.0` 目录运行。`outer.zip`、`target.zip` 和 `huge_dict.txt` 为示例路径，请替换成自己的文件；`test01.zip`～`test05.zip` 是随包提供的样例。
 
 ### 运行环境
 
@@ -90,7 +96,7 @@ python3 -m pip install pyzipper -i https://pypi.tuna.tsinghua.edu.cn/simple
 如果目标 ZIP 使用 AES，脚本会额外提醒你两件事：
 
 1. AES 本来就比传统 ZipCrypto 更慢
-2. 如果没装 `pyzipper`，AES 条目的验证或解压可能失败，建议先安装后再试
+2. 如果跳过安装，传统 ZipCrypto 仍可处理；真正的 AES 加密包会保留原包并停止无效尝试，安装后可重新运行
 
 #### 2. `bkcrack`
 
@@ -128,6 +134,8 @@ python3 ZipCracker.py test02.zip
 
 1. `password_list.txt`
 2. 1 到 6 位纯数字密码
+
+字典优先使用当前工作目录中的 `password_list.txt`；没有时使用脚本旁随包提供的内置字典，因此从其他目录启动也可正常找到它。显式指定字典文件或字典目录时，按你指定的路径处理。
 
 <img width="1460" height="774" alt="785a0b1d-4912-4ab7-b965-fb0b42fc5a85" src="https://github.com/user-attachments/assets/f0ac039b-dcf6-4ee6-bebb-7e3eb4ac3ca4" />
 
@@ -171,7 +179,7 @@ python3 ZipCracker.py test02.zip YourDictDirectory
 
 #### 4. 短明文 CRC32 枚举恢复
 
-对 ZIP 中长度为 1～6 字节的条目，可按归档记录的 CRC32 对可打印字符内容进行原像枚举；当候选内容计算得到的 CRC32 与记录值一致时，即判定为内容命中（终端会自动询问是否执行）。
+对 ZIP 中长度为 1～6 字节的条目，可按归档记录的 CRC32 对可打印字符内容进行原像枚举；交互终端会先询问是否执行。仅在找到匹配候选时计为恢复成功；全部文件条目恢复成功后，结果会写入输出目录。CRC32 匹配可能存在碰撞，候选内容不一定是唯一原文。
 
 ```bash
 python3 ZipCracker.py test03.zip
@@ -287,12 +295,14 @@ python3 ZipCracker.py test05.zip -kpa test05_plain.txt --bkcrack
 python3 ZipCracker.py test02.zip -o output_dir
 ```
 
+默认输出目录为 `unzipped_files`。所有解压流程都会先将内容完整提取到临时目录并验证，再交付到指定输出路径。目录里无关的文件会保留；同名旧文件先备份到输出目录旁的 `目录名_backup_随机串`，然后更新结果。输入 ZIP 位于输出目录内时，结果使用独立的 `包名_extracted` 子目录，保护输入包。路径越界和符号链接条目会被拒绝。
+
 #### 8. 套娃解压（递归处理嵌套压缩包）
 
 有的题目是压缩包套压缩包，一层套一层动辄上百层。加上 `-r` / `--recursive` 后，ZipCracker 会在当前压缩包完整解压成功后，只扫描本次产生的嵌套 ZIP，并复用字典/掩码设置逐层处理：
 
 ```bash
-python3 ZipCracker.py 1000.zip -r
+python3 ZipCracker.py outer.zip -r
 ```
 
 行为说明：
@@ -309,7 +319,7 @@ python3 ZipCracker.py 1000.zip -r
 | 参数 | 说明 |
 | :--- | :--- |
 | `-r`, `--recursive` | 启用套娃解压 |
-| `--max-depth N` | 最大递归深度，默认 2048 |
+| `--max-depth N` | 最大内层深度，默认 2048；最外层为深度 0 |
 | `--max-archives N` | 包数量上限，包含最外层，默认 4096 |
 | `--max-total-size SIZE` | 累计解压上限，默认 1GiB；支持字节数、KiB、MiB、GiB |
 | `--keep-nested-zips` | 保留已处理成功的中间压缩包 |
@@ -322,7 +332,15 @@ python3 ZipCracker.py outer.zip my_dict.txt -r --max-total-size 8GiB --max-archi
 
 累计解压量包含各层产生的中间 ZIP，以及失败尝试已写入的字节；删除中间包不会返还预算。上述资源限制仅作用于套娃模式，原有单包用法不受该默认上限影响。
 
-所有解压流程都会先将内容完整提取到临时目录并验证，再交付到原来的输出路径。输出目录里无关的文件会保留；同名旧文件先备份到输出目录旁的 `目录名_backup_随机串`，然后更新结果。输入 ZIP 位于输出目录内时，结果使用独立的 `包名_extracted` 子目录，保护输入包。路径越界和符号链接条目会被拒绝。
+输出目录与备份规则见[指定输出目录](#7-指定输出目录)。
+
+### 非交互运行与退出码
+
+在脚本、流水线或输入被重定向时，程序会跳过 CRC32 枚举和手动安装询问，继续可用的恢复流程；是否自动安装依赖也可通过文末的环境变量配置。超过 1000 亿组合的掩码需要在交互终端确认，非交互环境会停止并提示缩小范围。
+
+- `0`：所请求的处理成功；套娃模式下所有发现的内层包均处理完成
+- `1`：处理失败，或套娃模式仍有未恢复、损坏或因资源限制而跳过的包
+- `130`：用户中断操作
 
 ### 版本与测试
 
@@ -342,6 +360,13 @@ ZipCracker 可以处理很大的字典，不会一次性把整份字典读进内
 
 ```bash
 ZIPCRACKER_SKIP_DICT_COUNT=1 python3 ZipCracker.py your.zip your_big_dict.txt
+```
+
+Windows PowerShell 写法（对当前 PowerShell 会话生效）：
+
+```powershell
+$env:ZIPCRACKER_SKIP_DICT_COUNT = "1"
+python ZipCracker.py your.zip your_big_dict.txt
 ```
 
 <img width="2348" height="684" alt="d8f97f4d-6698-4f1d-bb92-1f7d593751c4" src="https://github.com/user-attachments/assets/e23e46dd-2734-4494-af22-79ca381864e9" />
@@ -368,7 +393,7 @@ AES 的密码校验和解压本来就通常比传统 ZipCrypto 慢很多。
 
 1. 脚本会先提示你安装
 2. 你也可以输入 `n` 跳过
-3. 但继续运行时，AES 条目的验证或解压可能失败
+3. 如果确认是真正的 AES 加密，程序会保留原包、返回失败状态并停止无效遍历；安装依赖后重新运行即可
 
 最稳妥的做法还是先安装：
 
@@ -488,4 +513,3 @@ clawhub install zipcracker
 **【战队知识星球】福利大放送**
 
 <img height="380" alt="image" src="https://github.com/user-attachments/assets/c9999f9c-2f24-4aca-9b42-c6c58f5d4083" />
-
