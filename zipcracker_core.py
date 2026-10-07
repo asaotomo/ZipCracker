@@ -5,10 +5,13 @@ from __future__ import annotations
 import binascii
 import builtins
 import bz2
+import ntpath
 from collections import deque
+from contextlib import contextmanager
 import copy
 import hashlib
 import importlib
+import io
 import itertools as its
 import json
 import multiprocessing
@@ -19,6 +22,7 @@ import re
 import shlex
 import shutil
 import ssl
+import stat
 import string
 import struct
 import subprocess
@@ -147,7 +151,36 @@ class KpaTargetEntryInfo:
 
 
 DEFAULT_NESTED_MAX_DEPTH = 2048
+DEFAULT_NESTED_MAX_ARCHIVES = 4096
+DEFAULT_NESTED_MAX_TOTAL_SIZE = 1024 * 1024 * 1024
 NESTED_ARCHIVE_SUFFIXES = (".zip",)
+
+
+class ExtractionLimitError(ValueError):
+    pass
+
+
+@dataclass
+class ExtractionBudget:
+    max_bytes: int
+    written_bytes: int = 0
+
+    def check(self, size: int) -> None:
+        if size > self.max_bytes - self.written_bytes:
+            raise ExtractionLimitError(
+                f"解压总量超过限制 / Total extraction limit exceeded ({self.max_bytes} bytes)"
+            )
+
+    def consume(self, size: int) -> None:
+        self.check(size)
+        self.written_bytes += size
+
+
+@dataclass
+class ExtractionContext:
+    budget: Optional[ExtractionBudget] = None
+    names: list[str] = field(default_factory=list)
+    completed: bool = False
 
 
 @dataclass
@@ -165,6 +198,9 @@ class ZipCrackerOptions:
     use_bkcrack_recover: bool = False
     recursive: bool = False
     nested_max_depth: int = DEFAULT_NESTED_MAX_DEPTH
+    nested_max_archives: int = DEFAULT_NESTED_MAX_ARCHIVES
+    nested_max_total_size: int = DEFAULT_NESTED_MAX_TOTAL_SIZE
+    extraction_budget: Optional[ExtractionBudget] = None
     keep_nested_zips: bool = False
     interactive: bool = True
     basic_default_mode: bool = False
@@ -178,6 +214,17 @@ class CrackOutcome:
     extracted: bool = False
     extracted_dir: Optional[str] = None
     extracted_names: list[str] = field(default_factory=list)
+
+
+@dataclass
+class NestedSummary:
+    processed: int = 0
+    deepest_depth: int = 0
+    unresolved: list[str] = field(default_factory=list)
+
+    @property
+    def success(self) -> bool:
+        return not self.unresolved
 
 
 def loc(locale: str, zh: str, en: str) -> str:
@@ -652,8 +699,8 @@ def archive_encryption_notice_lines(
         lines.append(
             loc(
                 locale,
-                "[*] 如果继续，AES 条目的密码验证或解压可能失败，也可能看起来更慢。建议先安装 pyzipper 后再重试。",
-                "[*] If you continue, AES entry verification or extraction may fail and may also appear slower. Installing pyzipper before retrying is strongly recommended.",
+                "[*] 真正的 AES 加密需要 pyzipper；缺少依赖时会保留原包并停止无效尝试，请安装后重试。",
+                "[*] Genuine AES encryption requires pyzipper. Without it, the archive is kept and ineffective attempts are skipped; install it and retry.",
             )
         )
 
@@ -2362,6 +2409,8 @@ def offer_template_kpa_after_standard_failures(
     zip_path: str,
     out_dir: str,
     locale: str,
+    *,
+    extraction_context: Optional[ExtractionContext] = None,
 ) -> bool:
     suggestions = detect_template_kpa_suggestions(zip_path, locale)
     if not suggestions:
@@ -2442,6 +2491,7 @@ def offer_template_kpa_after_standard_failures(
                 out_dir,
                 locale,
                 bk_tool,
+                extraction_context=extraction_context,
             ):
                 return True
         finally:
@@ -2884,17 +2934,70 @@ def parse_bkcrack_recovered_password(text: str) -> Optional[str]:
 
 
 def decompress_zip_member_data(info: zipfile.ZipInfo, data: bytes) -> bytes:
-    if info.compress_type == zipfile.ZIP_STORED:
-        return data
-    if info.compress_type == zipfile.ZIP_DEFLATED:
-        return zlib.decompress(data, -15)
-    if info.compress_type == zipfile.ZIP_BZIP2:
-        return bz2.decompress(data)
-    if info.compress_type == zipfile.ZIP_LZMA:
-        return lzma.decompress(data)
-    raise NotImplementedError(
-        f"Unsupported compression method for '{info.filename}': {info.compress_type}"
-    )
+    output = io.BytesIO()
+    copy_zip_member_data(info, io.BytesIO(data), output, ExtractionContext())
+    return output.getvalue()
+
+
+def copy_zip_member_data(info, source, output, context: ExtractionContext) -> None:
+    """Decode bkcrack's compressed plaintext with bounded buffers and CRC checks."""
+    method = info.compress_type
+    if method == zipfile.ZIP_STORED:
+        decoder = None
+    elif method == zipfile.ZIP_DEFLATED:
+        decoder = zlib.decompressobj(-15)
+    elif method == zipfile.ZIP_BZIP2:
+        decoder = bz2.BZ2Decompressor()
+    elif method == zipfile.ZIP_LZMA:
+        # ZIP LZMA has its own properties header, not an .xz/.lzma container.
+        header = source.read(4)
+        if len(header) != 4:
+            raise zipfile.BadZipFile("Missing ZIP LZMA header")
+        props_size = struct.unpack("<H", header[2:])[0]
+        props = source.read(props_size)
+        decoder = lzma.LZMADecompressor(lzma.FORMAT_RAW, filters=[
+            lzma._decode_filter_properties(lzma.FILTER_LZMA1, props)
+        ])
+    else:
+        raise NotImplementedError(f"Unsupported compression method: {method}")
+    size = 0
+    crc = 0
+
+    def write(data):
+        nonlocal size, crc
+        size += len(data)
+        if size > info.file_size:
+            raise zipfile.BadZipFile(f"ZIP entry exceeds declared size: {info.filename}")
+        if context.budget:
+            context.budget.consume(len(data))
+        crc = binascii.crc32(data, crc)
+        output.write(data)
+
+    while True:
+        chunk = source.read(64 * 1024)
+        if not chunk:
+            break
+        if decoder is None:
+            write(chunk)
+            continue
+        if decoder.eof:
+            raise zipfile.BadZipFile(f"Trailing compressed data: {info.filename}")
+        while True:
+            write(decoder.decompress(chunk, STREAM_READ_CHUNK_SIZE))
+            if method == zipfile.ZIP_DEFLATED:
+                chunk = decoder.unconsumed_tail
+                if not chunk:
+                    break
+            elif decoder.eof or decoder.needs_input:
+                break
+            else:
+                chunk = b""
+        if decoder.unused_data:
+            raise zipfile.BadZipFile(f"Trailing compressed data: {info.filename}")
+    if size != info.file_size or crc & 0xFFFFFFFF != info.CRC:
+        raise zipfile.BadZipFile(f"ZIP entry integrity check failed: {info.filename}")
+    if decoder is not None and not decoder.eof and (method != zipfile.ZIP_LZMA or info.flag_bits & 2):
+        raise zipfile.BadZipFile(f"Truncated compressed data: {info.filename}")
 
 
 def extract_with_bkcrack_keys(
@@ -2903,16 +3006,23 @@ def extract_with_bkcrack_keys(
     zip_path: str,
     out_dir: str,
     locale: str,
+    *,
+    extraction_context: Optional[ExtractionContext] = None,
 ) -> tuple[bool, list[str] | str]:
     k0, k1, k2 = keys
-    _clean_and_create_outdir(out_dir)
+    context = extraction_context if extraction_context is not None else ExtractionContext()
+    context.completed = False
+    context.names = []
     extracted_names: list[str] = []
 
     try:
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            infos = [info for info in zf.infolist() if is_regular_member(info)]
-            for info in infos:
-                dest_path = os.path.join(out_dir, info.filename)
+        with zipfile.ZipFile(zip_path, "r") as zf, staged_output(out_dir) as staging:
+            plan = extraction_plan(zf, context)
+            for info, name in plan:
+                dest_path = os.path.join(staging, *name.split("/"))
+                if info.is_dir():
+                    os.makedirs(dest_path, exist_ok=True)
+                    continue
                 parent_dir = os.path.dirname(dest_path)
                 if parent_dir:
                     os.makedirs(parent_dir, exist_ok=True)
@@ -2953,24 +3063,31 @@ def extract_with_bkcrack_keys(
                                     f"bkcrack could not export deciphered data for entry '{info.filename}': {detail}",
                                 ),
                             )
-                        with open(tmp_path, "rb") as fp:
-                            compressed_data = fp.read()
+                        with open(tmp_path, "rb") as fp, open(dest_path, "wb") as output:
+                            copy_zip_member_data(info, fp, output, context)
                     finally:
                         if os.path.exists(tmp_path):
                             try:
                                 os.remove(tmp_path)
                             except OSError:
                                 pass
-                    payload = decompress_zip_member_data(info, compressed_data)
                 else:
-                    payload = zf.read(info.filename)
-
-                with open(dest_path, "wb") as output:
-                    output.write(payload)
-                extracted_names.append(info.filename)
+                    with zf.open(info) as source, open(dest_path, "wb") as output:
+                        while True:
+                            chunk = source.read(STREAM_READ_CHUNK_SIZE)
+                            if not chunk:
+                                break
+                            if context.budget:
+                                context.budget.consume(len(chunk))
+                            output.write(chunk)
+                extracted_names.append(name)
+            extracted_names = sorted(os.path.relpath(os.path.join(root, name), staging)
+                                     for root, _, files in os.walk(staging) for name in files)
     except Exception as exc:
         return False, str(exc)
 
+    context.names = extracted_names
+    context.completed = True
     return True, extracted_names
 
 
@@ -3012,14 +3129,146 @@ def find_best_verification_entry(zf) -> Optional[str]:
     return min(candidates, key=score).filename
 
 
-def _clean_and_create_outdir(out_dir: str) -> None:
-    """仅确保输出目录存在。
+def extraction_plan(zf, context: ExtractionContext) -> list[tuple[object, str]]:
+    """Validate every member before writing; use the same names for scanning later."""
+    plan = []
+    seen: dict[str, bool] = {}
+    total = 0
+    for info in zf.infolist():
+        raw = info.filename.replace("\\", "/")
+        parts = [part for part in raw.split("/") if part and part != "."]
+        mode = info.external_attr >> 16
+        kind = stat.S_IFMT(mode)
+        if (
+            not parts
+            or raw.startswith("/")
+            or ntpath.splitdrive(raw)[0]
+            or ".." in parts
+            or any(":" in part or "\x00" in part for part in parts)
+            or kind not in (0, stat.S_IFREG, stat.S_IFDIR)
+        ):
+            raise ValueError(f"不安全的 ZIP 路径 / Unsafe ZIP member: {info.filename!r}")
+        name = "/".join(parts)
+        key = os.path.normcase(name)
+        is_dir = info.is_dir()
+        if key in seen and seen[key] != is_dir:
+            raise ValueError(f"ZIP 路径冲突 / Conflicting ZIP member: {name!r}")
+        seen[key] = is_dir
+        plan.append((info, name))
+        if not is_dir:
+            total += info.file_size
+    for key in seen:
+        parent = key.rpartition("/")[0]
+        while parent:
+            if parent in seen and not seen[parent]:
+                raise ValueError(f"ZIP 路径冲突 / Conflicting ZIP paths: {key!r}")
+            parent = parent.rpartition("/")[0]
+    if context.budget:
+        context.budget.check(total)
+    return plan
 
-    历史实现会先 rmtree 整个输出目录；一旦输入 ZIP 或其他无关文件恰好位于
-    输出目录内，就会被连带删除。为避免误删用户文件，这里不再清理已有内容，
-    解压时同名文件按 ZIP 内条目正常覆盖。
-    """
-    os.makedirs(out_dir, exist_ok=True)
+
+def publish_extraction(staging: str, destination: str) -> None:
+    """Keep -o paths compatible; preserve collisions and roll back a failed merge."""
+    if os.path.islink(destination):
+        raise ValueError(f"输出目录不可为符号链接 / Output must not be a symlink: {destination}")
+    if not os.path.exists(destination):
+        os.rename(staging, destination)
+        return
+    if not os.path.isdir(destination):
+        raise ValueError(f"输出路径不是目录 / Output is not a directory: {destination}")
+    if not os.listdir(destination):
+        os.rmdir(destination)
+        os.rename(staging, destination)
+        return
+
+    installed = []
+    saved = []
+    backup = None
+
+    def merge(source, target):
+        nonlocal backup
+        if os.path.isdir(source) and os.path.isdir(target) and not os.path.islink(target):
+            for item in sorted(os.listdir(source)):
+                merge(os.path.join(source, item), os.path.join(target, item))
+            return
+        if os.path.lexists(target):
+            if backup is None:
+                backup = tempfile.mkdtemp(prefix=os.path.basename(destination) + "_backup_", dir=os.path.dirname(destination))
+            saved_path = os.path.join(backup, os.path.relpath(target, destination))
+            os.makedirs(os.path.dirname(saved_path), exist_ok=True)
+            os.rename(target, saved_path)
+            saved.append((saved_path, target))
+        os.rename(source, target)
+        installed.append(target)
+
+    try:
+        for name in sorted(os.listdir(staging)):
+            merge(os.path.join(staging, name), os.path.join(destination, name))
+    except BaseException:
+        for path in reversed(installed):
+            if os.path.isdir(path) and not os.path.islink(path):
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+        for saved_path, target in reversed(saved):
+            os.rename(saved_path, target)
+        if backup:
+            shutil.rmtree(backup)
+        raise
+    if backup:
+        print(f"[*] 同名旧文件已备份 / Previous output files backed up: {backup}")
+
+
+@contextmanager
+def staged_output(out_dir: str):
+    """Validate and stage all bytes before changing the output directory."""
+    destination = os.path.abspath(out_dir)
+    parent = os.path.realpath(os.path.dirname(destination))
+    os.makedirs(parent, exist_ok=True)
+    destination = os.path.join(parent, os.path.basename(destination))
+    staging = tempfile.mkdtemp(prefix=".zipcracker-extract-", dir=parent)
+    try:
+        yield staging
+        publish_extraction(staging, destination)
+    finally:
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
+
+
+def extract_archive(zf, out_dir: str, context: Optional[ExtractionContext] = None, *, pwd=None) -> list[str]:
+    context = context if context is not None else ExtractionContext()
+    context.completed = False
+    context.names = []
+    plan = extraction_plan(zf, context)
+    names = []
+    with staged_output(out_dir) as staging:
+        for info, name in plan:
+            target = os.path.join(staging, *name.split("/"))
+            if info.is_dir():
+                os.makedirs(target, exist_ok=True)
+                continue
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            size = 0
+            with zf.open(info, "r", pwd=pwd) as source, open(target, "wb") as output:
+                while True:
+                    chunk = source.read(STREAM_READ_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    if context.budget:
+                        context.budget.consume(len(chunk))
+                    output.write(chunk)
+                    size += len(chunk)
+            if size != info.file_size:
+                raise zipfile.BadZipFile(f"ZIP entry size mismatch: {name}")
+            names.append(name)
+        # A ZIP may contain duplicate names. Match extractall's last-entry-wins
+        # behavior while returning each actual output file exactly once.
+        names = sorted(os.path.relpath(os.path.join(root, name), staging)
+                       for root, _, files in os.walk(staging) for name in files)
+    context.names = names
+    context.completed = True
+    return names
 
 
 def is_zip_encrypted(file_path: str) -> bool:
@@ -3038,12 +3287,13 @@ def fix_zip_encrypted(file_path: str, temp_path: str) -> None:
                 if info.flag_bits & 0x1:
                     info.flag_bits ^= 0x1
                 clean_info = copy.copy(info)
-                temp_zf.writestr(clean_info, zf.read(info.filename))
+                with zf.open(info) as source, temp_zf.open(clean_info, "w") as output:
+                    shutil.copyfileobj(source, output, STREAM_READ_CHUNK_SIZE)
             finally:
                 info.flag_bits = original_flag_bits
 
 
-def crack_crc(filename: str, crc: int, size: int, locale: str) -> None:
+def crack_crc(filename: str, crc: int, size: int, locale: str) -> Optional[bytes]:
     """短明文 CRC32 枚举恢复：穷举可打印明文，直至 binascii.crc32 与 ZIP 条目记录一致。"""
     candidates = its.product(string.printable, repeat=size)
     print(
@@ -3063,7 +3313,9 @@ def crack_crc(filename: str, crc: int, size: int, locale: str) -> None:
                     f"[*] Short-plaintext CRC32 enumeration recovery succeeded.\n[*] Content of {filename}: {raw.decode()}",
                 )
             )
-            break
+            return raw
+    print(loc(locale, f"[-] 未恢复短明文条目: {filename}", f"[-] Short plaintext was not recovered: {filename}"))
+    return None
 
 
 def get_crc(
@@ -3072,9 +3324,12 @@ def get_crc(
     locale: str,
     *,
     interactive: bool = True,
+    out_dir: Optional[str] = None,
+    extraction_context: Optional[ExtractionContext] = None,
 ) -> bool:
     """若存在 1～6 字节条目，询问是否执行短明文 CRC32 枚举恢复；全部条目均由此完成时跳过字典爆破。"""
     cracked_all = 0
+    recovered = {}
     file_list = [name for name in zf.namelist() if not name.endswith("/")]
     if not file_list:
         return False
@@ -3115,10 +3370,29 @@ def get_crc(
                         f"[+] CRC32 stored in ZIP for {filename}: {info.CRC}",
                     )
                 )
-                crack_crc(filename, info.CRC, info.file_size, locale)
-                cracked_all += 1
+                raw = crack_crc(filename, info.CRC, info.file_size, locale)
+                if raw is not None:
+                    recovered[filename] = raw
+                    cracked_all += 1
 
     if cracked_all >= len(file_list):
+        if out_dir is not None:
+            context = extraction_context if extraction_context is not None else ExtractionContext()
+            plan = extraction_plan(zf, context)
+            with staged_output(out_dir) as staging:
+                for info, name in plan:
+                    target = os.path.join(staging, *name.split("/"))
+                    if info.is_dir():
+                        os.makedirs(target, exist_ok=True)
+                        continue
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    raw = recovered[info.filename]
+                    if context.budget:
+                        context.budget.consume(len(raw))
+                    with open(target, "wb") as fp:
+                        fp.write(raw)
+            context.names = list(dict.fromkeys(name for info, name in plan if not info.is_dir()))
+            context.completed = True
         print(
             loc(
                 locale,
@@ -3568,6 +3842,7 @@ def run_bkcrack_known_plaintext_attack(
     extra_specs: Optional[Sequence[tuple[int, bytes]]] = None,
     plain_source_override: Optional[dict] = None,
     attempt_label: str = "",
+    extraction_context: Optional[ExtractionContext] = None,
 ) -> bool:
     bk = bk_path or find_bkcrack_executable()
     if not bk:
@@ -3745,7 +4020,8 @@ def run_bkcrack_known_plaintext_attack(
             f"[+] Recovered internal keys from known plaintext: {k0} {k1} {k2}",
         )
     )
-    decrypted_zip = zip_path + ".bkcrack_decrypted.zip"
+    fd, decrypted_zip = tempfile.mkstemp(prefix="zipcracker_decrypted_", suffix=".zip")
+    os.close(fd)
     try:
         subprocess.run(
             [
@@ -3780,6 +4056,7 @@ def run_bkcrack_known_plaintext_attack(
             zip_path,
             out_dir,
             locale,
+            extraction_context=extraction_context,
         )
         if not ok:
             print(
@@ -3799,11 +4076,9 @@ def run_bkcrack_known_plaintext_attack(
             )
         )
     else:
-        _clean_and_create_outdir(out_dir)
         try:
             with zipfile.ZipFile(decrypted_zip) as zf:
-                zf.extractall(path=out_dir)
-                names = zf.namelist()
+                names = extract_archive(zf, out_dir, extraction_context)
             print(
                 loc(
                     locale,
@@ -3855,6 +4130,8 @@ def run_bkcrack_known_plaintext_attempts(
     out_dir: str,
     locale: str,
     bk_path: Optional[str] = None,
+    *,
+    extraction_context: Optional[ExtractionContext] = None,
 ) -> bool:
     bk = bk_path or find_bkcrack_executable()
     if not bk:
@@ -3888,6 +4165,7 @@ def run_bkcrack_known_plaintext_attempts(
             extra_specs=attempt.extra_specs,
             plain_source_override=attempt.plain_source,
             attempt_label=attempt.label,
+            extraction_context=extraction_context,
         ):
             return True
         if total > 1 and index < total:
@@ -3909,15 +4187,19 @@ class PasswordVerifier:
         kpa_ciphertext: Optional[bytes] = None,
         kpa_plaintext_bytes: Optional[bytes] = None,
         kpa_inner_name: Optional[str] = None,
+        extraction_context: Optional[ExtractionContext] = None,
     ) -> None:
         self.zip_file = zip_file
         self.kpa_ciphertext = kpa_ciphertext
         self.kpa_plaintext_bytes = kpa_plaintext_bytes
         self.kpa_inner_name = kpa_inner_name
+        self.extraction_context = extraction_context or ExtractionContext()
+        self.extraction_error: Optional[str] = None
         self._thread_local = threading.local()
 
         with zipfile.ZipFile(zip_file, "r") as zf:
             self.verification_entry = find_best_verification_entry(zf)
+            self.verification_entry_size = zf.getinfo(self.verification_entry).file_size if self.verification_entry else 0
             self.archive_names = zf.namelist()
 
     def _open_archive(self):
@@ -3961,7 +4243,12 @@ class PasswordVerifier:
         if not self.verification_entry:
             return False
         archive = self._get_thread_archive()
-        archive.read(self.verification_entry, pwd=password_bytes)
+        if self.verification_entry_size <= STREAM_READ_CHUNK_SIZE:
+            archive.read(self.verification_entry, pwd=password_bytes)
+        else:
+            with archive.open(self.verification_entry, pwd=password_bytes) as source:
+                while source.read(STREAM_READ_CHUNK_SIZE):
+                    pass
         return True
 
     def verify_password(self, password: str) -> bool:
@@ -3993,11 +4280,9 @@ class PasswordVerifier:
                 return False
 
     def extract(self, password: str, out_dir: str) -> list[str]:
-        _clean_and_create_outdir(out_dir)
         password_bytes = password.encode("utf-8")
         with self._open_archive() as zf:
-            zf.extractall(path=out_dir, pwd=password_bytes)
-            return zf.namelist()
+            return extract_archive(zf, out_dir, self.extraction_context, pwd=password_bytes)
 
 
 @dataclass
@@ -4232,6 +4517,7 @@ def run_parallel_passwords(
                 )
             )
         except Exception as exc:
+            verifier.extraction_error = str(exc)
             print(
                 loc(
                     locale,
@@ -4239,6 +4525,7 @@ def run_parallel_passwords(
                     f"\n[!] Password is correct, but extraction failed: {exc}",
                 )
             )
+            return False
         return True
     return False
 
@@ -4249,17 +4536,20 @@ def crack_password_with_mask(
     verifier: PasswordVerifier,
     locale: str,
     out_dir: str,
+    *,
+    interactive: bool = True,
 ) -> bool:
     token_groups, total_passwords = parse_mask(mask)
     if total_passwords > 100_000_000_000:
-        if not sys.stdin.isatty():
+        if not interactive or not sys.stdin.isatty():
             print(
                 loc(
                     locale,
-                    f"[*] 当前为非交互环境，跳过掩码组合数确认，直接继续攻击（共 {total_passwords:,} 种组合）。",
-                    f"[*] Non-interactive session: skipping the confirmation and continuing ({total_passwords:,} combinations).",
+                    f"[!] 非交互模式下拒绝超大掩码（共 {total_passwords:,} 种组合），请缩小范围或在交互终端运行。",
+                    f"[!] Refusing an oversized mask in non-interactive mode ({total_passwords:,} combinations). Narrow the mask or use an interactive terminal.",
                 )
             )
+            return False
         else:
             choice = input(
                 timestamped_prompt(
@@ -4436,6 +4726,8 @@ def crack_password_with_file_or_dir(
                 zip_file, file_path, verifier, locale, out_dir
             ):
                 return True
+            if verifier.extraction_error:
+                return False
         return False
 
     if os.path.isfile(dict_file_or_dir):
@@ -4518,7 +4810,7 @@ def print_banner(locale: str) -> None:
      / /_| | |_) | | |___| | | (_| | (__|   <  __/ |   
     /____|_| .__/___\____|_|  \__,_|\___|_|\_\___|_|   
            |_| |_____|                                 
-    #Coded By Asaotomo         Update:2026.05.25 (Core Engine Refactor)
+    #Coded By Asaotomo         Update:2026.10.07 (v2.2.0)
             """,
             r"""                          
      ______          ____                _   [*]Hx0 Team
@@ -4527,7 +4819,7 @@ def print_banner(locale: str) -> None:
      / /_| | |_) | | |___| | | (_| | (__|   <  __/ |   
     /____|_| .__/___\____|_|  \__,_|\___|_|\_\___|_|   
            |_| |_____|                                 
-    #Coded By Asaotomo         Update:2026.05.25 (Core Engine Refactor)
+    #Coded By Asaotomo         Update:2026.10.07 (v2.2.0)
             """,
         )
     )
@@ -4555,9 +4847,9 @@ def print_usage(locale: str, script_name: str) -> None:
         raw_print(f"[*] Usage 7 (Template KPA): python {script_name} enc.zip --kpa-template png [ -c image.png ]")
         raw_print(f"[*] Usage 8 (bkcrack only): python {script_name} enc.zip -kpa plain.txt [ -c inner ] --bkcrack")
         raw_print("\n--- Nested ZIP (Recursive) ---")
-        raw_print(f"[*] Usage 9 (Nested): python {script_name} YourZipFile.zip -r [ --max-depth N ] [ --keep-nested-zips ]")
+        raw_print(f"[*] Usage 9 (Nested): python {script_name} YourZipFile.zip -r [ --max-depth N ] [ --max-archives N ] [ --max-total-size 1GiB ] [ --keep-nested-zips ]")
         raw_print("         └─ After a crack/extract succeeds, scan the output for inner ZIPs and run the full pipeline on each layer.")
-        raw_print("         └─ --max-depth N caps recursion depth (default 2048); --keep-nested-zips keeps processed intermediate ZIPs (removed by default).")
+        raw_print("         └─ Defaults: depth 2048, archives 4096 (including outer), total extraction 1GiB. Failed archives and original input are kept; --keep-nested-zips also keeps successful intermediate ZIPs.")
         raw_print("\n--- Optional Arguments ---")
         raw_print(f"[*] Specify Output Directory: python {script_name} ... -o YourOutDir")
         raw_print("[*] KPA offset: --kpa-offset 78")
@@ -4583,9 +4875,9 @@ def print_usage(locale: str, script_name: str) -> None:
     raw_print(f"[*] 用法7(模板KPA):  python {script_name} enc.zip --kpa-template png [ -c image.png ]")
     raw_print(f"[*] 用法8(仅bkcrack): python {script_name} enc.zip -kpa plain.txt [ -c inner ] --bkcrack")
     raw_print("\n--- 套娃解压 (递归) ---")
-    raw_print(f"[*] 用法9(套娃解压): python {script_name} YourZipFile.zip -r [ --max-depth N ] [ --keep-nested-zips ]")
+    raw_print(f"[*] 用法9(套娃解压): python {script_name} YourZipFile.zip -r [ --max-depth N ] [ --max-archives N ] [ --max-total-size 1GiB ] [ --keep-nested-zips ]")
     raw_print("         └─ 破解/解压成功后自动扫描结果中的嵌套 ZIP，对每一层重新执行完整流程（伪加密修复 → CRC32 → 字典/掩码）。")
-    raw_print("         └─ --max-depth N 限制最大递归深度（默认 2048）；--keep-nested-zips 保留处理过的中间压缩包（默认处理成功后删除）。")
+    raw_print("         └─ 默认深度 2048、包数量 4096（含最外层）、累计解压 1GiB；失败包和最外层输入始终保留，--keep-nested-zips 也保留成功的中间包。")
     raw_print("\n--- 可选参数 ---")
     raw_print(f"[*] 指定输出目录:  python {script_name} ... -o YourOutDir")
     raw_print("[*] KPA 偏移量:    --kpa-offset 78")
@@ -4595,8 +4887,8 @@ def print_usage(locale: str, script_name: str) -> None:
 
 
 def _is_path_inside(child: str, parent: str) -> bool:
-    child_abs = os.path.normcase(os.path.abspath(child))
-    parent_abs = os.path.normcase(os.path.abspath(parent))
+    child_abs = os.path.normcase(os.path.realpath(child))
+    parent_abs = os.path.normcase(os.path.realpath(parent))
     if child_abs == parent_abs:
         return False
     try:
@@ -4606,14 +4898,18 @@ def _is_path_inside(child: str, parent: str) -> bool:
 
 
 def resolve_extraction_destination(zip_file: str, out_dir: str) -> str:
-    """输入 ZIP 位于输出目录内时改用独立子目录，避免清理输出目录时误删输入文件。"""
+    """Keep existing output contents in place; allocate a fresh result directory."""
+    if os.path.islink(out_dir):
+        raise ValueError(f"输出目录不可为符号链接 / Output must not be a symlink: {out_dir}")
+    if os.path.exists(out_dir) and not os.path.isdir(out_dir):
+        raise ValueError(f"输出路径不是目录 / Output is not a directory: {out_dir}")
     if not _is_path_inside(zip_file, out_dir):
         return out_dir
     stem = os.path.splitext(os.path.basename(zip_file))[0]
     safe_stem = re.sub(r"[^\w\-.]+", "_", stem)[:60] or "archive"
     candidate = os.path.join(out_dir, f"{safe_stem}_extracted")
     serial = 1
-    while os.path.exists(candidate):
+    while os.path.lexists(candidate):
         candidate = os.path.join(out_dir, f"{safe_stem}_extracted_{serial}")
         serial += 1
     return candidate
@@ -4624,21 +4920,15 @@ def make_nested_dest_dir(base_dir: str, counter: int, zip_path: str) -> str:
     safe_stem = re.sub(r"[^\w\-.]+", "_", stem)[:60] or "archive"
     candidate = os.path.join(base_dir, f"nested_{counter:04d}_{safe_stem}")
     serial = 1
-    while os.path.exists(candidate):
+    while os.path.lexists(candidate):
         candidate = os.path.join(base_dir, f"nested_{counter:04d}_{safe_stem}_{serial}")
         serial += 1
     return candidate
 
 
 def is_probably_zip_file(path: str) -> bool:
-    if not path.lower().endswith(NESTED_ARCHIVE_SUFFIXES):
-        return False
-    try:
-        with open(path, "rb") as fp:
-            head = fp.read(4)
-    except OSError:
-        return False
-    return head.startswith(b"PK")
+    # Include damaged ZIP candidates so the final summary reports them as failures.
+    return path.lower().endswith(NESTED_ARCHIVE_SUFFIXES) and os.path.isfile(path) and not os.path.islink(path)
 
 
 def find_nested_zips(root_dir: str) -> list[str]:
@@ -4660,7 +4950,7 @@ def build_nested_options(options: ZipCrackerOptions) -> ZipCrackerOptions:
     """嵌套层复用字典/掩码设置；已知明文参数只对最外层有意义，逐层丢弃。"""
     nested = copy.copy(options)
     nested.interactive = False
-    nested.basic_default_mode = True
+    nested.basic_default_mode = False
     nested.kpa_plain_path = None
     nested.kpa_inner_name = None
     nested.kpa_offset = None
@@ -4676,23 +4966,15 @@ def run_nested_extraction(
     locale: str,
     options: ZipCrackerOptions,
     initial_zips: Optional[Sequence[str]] = None,
-) -> None:
+) -> NestedSummary:
     """套娃解压：迭代扫描解压结果中的嵌套 ZIP，并对每一层复用完整破解流水线。
 
-    initial_zips 提供时只处理这批文件（本次解压产物），避免把输出目录中
-    历史遗留的压缩包误当作嵌套层。
+    只处理 initial_zips 中本次解压的产物；没有清单时不扫描历史文件。
     """
     max_depth = max(1, int(options.nested_max_depth))
-    if initial_zips is None:
-        seeds = find_nested_zips(scan_root)
-    else:
-        seeds = [
-            path
-            for path in initial_zips
-            if os.path.isfile(path)
-            and is_probably_zip_file(path)
-            and _is_path_inside(path, scan_root)
-        ]
+    summary = NestedSummary()
+    seeds = [path for path in (initial_zips or ())
+             if is_probably_zip_file(path) and _is_path_inside(path, scan_root)]
     pending: deque[tuple[str, int]] = deque((path, 1) for path in seeds)
     if not pending:
         print(
@@ -4702,12 +4984,12 @@ def run_nested_extraction(
                 "[*] Nested extraction: no nested ZIP found in the extracted output. Done.",
             )
         )
-        return
+        return summary
 
     nested_options = build_nested_options(options)
     processed = 0
     deepest_depth = 0
-    unresolved: list[str] = []
+    unresolved = summary.unresolved
     print(
         loc(
             locale,
@@ -4718,6 +5000,10 @@ def run_nested_extraction(
 
     while pending:
         zip_path, depth = pending.popleft()
+        if processed + 1 >= options.nested_max_archives:
+            unresolved.extend([zip_path, *(path for path, _ in pending)])
+            print(loc(locale, "[!] 已达到套娃包数量上限，保留剩余文件。", "[!] Archive count limit reached; remaining archives were kept."))
+            break
         if depth > max_depth:
             unresolved.append(zip_path)
             print(
@@ -4773,6 +5059,7 @@ def run_nested_extraction(
             continue
 
         if not outcome.extracted:
+            unresolved.append(zip_path)
             print(
                 loc(
                     locale,
@@ -4782,7 +5069,13 @@ def run_nested_extraction(
             )
             continue
 
-        children = find_nested_zips(dest_dir)
+        extracted_root = outcome.extracted_dir or dest_dir
+        children = [
+            os.path.join(extracted_root, name)
+            for name in outcome.extracted_names
+            if is_probably_zip_file(os.path.join(extracted_root, name))
+            and _is_path_inside(os.path.join(extracted_root, name), extracted_root)
+        ]
         for child in children:
             pending.append((child, depth + 1))
         if children:
@@ -4839,6 +5132,9 @@ def run_nested_extraction(
                 "[+] All nested archives were processed successfully.",
             )
         )
+    summary.processed = processed
+    summary.deepest_depth = deepest_depth
+    return summary
 
 
 def run_crack_pipeline(
@@ -4847,6 +5143,18 @@ def run_crack_pipeline(
     """对单个 ZIP 执行完整破解流水线（伪加密修复 → CRC32 → KPA → 字典/掩码/模板）。"""
     outcome = CrackOutcome()
     out_dir = resolve_extraction_destination(zip_file, options.out_dir)
+    if options.recursive and options.extraction_budget is None:
+        options.extraction_budget = ExtractionBudget(options.nested_max_total_size)
+    extraction = ExtractionContext(budget=options.extraction_budget)
+
+    def extracted_outcome() -> CrackOutcome:
+        return CrackOutcome(
+            success=extraction.completed,
+            extracted=extraction.completed,
+            extracted_dir=out_dir if extraction.completed else None,
+            extracted_names=list(extraction.names),
+        )
+
     dict_path_or_mask_flag = options.dict_path_or_mask_flag
     mask_value = options.mask_value
     kpa_plain_path = options.kpa_plain_path
@@ -4899,6 +5207,13 @@ def run_crack_pipeline(
         )
         return outcome
 
+    try:
+        with zipfile.ZipFile(zip_file) as zf:
+            extraction_plan(zf, extraction)
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        print(loc(locale, f"[!] 无法处理 ZIP: {exc}", f"[!] Cannot process ZIP: {exc}"))
+        return outcome
+
     archive_profile = collect_archive_encryption_profile(zip_file)
     if options.interactive:
         pyzipper_ready = offer_pyzipper_install(locale, zip_file)
@@ -4928,11 +5243,14 @@ def run_crack_pipeline(
                 f"[!] Encryption flag detected in {zip_file}. Attempting pseudo-encryption repair...",
             )
         )
-        fixed_zip_name = zip_file + ".fixed.tmp"
+        fd, fixed_zip_name = tempfile.mkstemp(prefix="zipcracker_fixed_", suffix=".zip")
+        os.close(fd)
         try:
             fix_zip_encrypted(zip_file, fixed_zip_name)
             with zipfile.ZipFile(fixed_zip_name) as fixed_zf:
-                fixed_zf.testzip()
+                damaged = fixed_zf.testzip()
+                if damaged is not None:
+                    raise zipfile.BadZipFile(f"CRC check failed: {damaged}")
 
             print(
                 loc(
@@ -4941,10 +5259,12 @@ def run_crack_pipeline(
                     f"[*] Pseudo-encryption fixed successfully. File '{zip_file}' does not require a password.",
                 )
             )
-            _clean_and_create_outdir(out_dir)
-            with zipfile.ZipFile(fixed_zip_name) as fixed_zf:
-                fixed_zf.extractall(path=out_dir)
-                names = fixed_zf.namelist()
+            try:
+                with zipfile.ZipFile(fixed_zip_name) as fixed_zf:
+                    names = extract_archive(fixed_zf, out_dir, extraction)
+            except Exception as exc:
+                print(loc(locale, f"[!] 解压失败，原包已保留: {exc}", f"[!] Extraction failed; original kept: {exc}"))
+                return outcome
             print(
                 loc(
                     locale,
@@ -4952,11 +5272,7 @@ def run_crack_pipeline(
                     f"[*] Successfully extracted {len(names)} file(s) to '{out_dir}': {names}",
                 )
             )
-            outcome.success = True
-            outcome.extracted = True
-            outcome.extracted_dir = out_dir
-            outcome.extracted_names = list(names)
-            return outcome
+            return extracted_outcome()
         except Exception:
             is_truly_encrypted = True
             print(
@@ -4976,10 +5292,8 @@ def run_crack_pipeline(
     if not is_zip_encrypted(zip_file):
         if options.recursive:
             try:
-                _clean_and_create_outdir(out_dir)
                 with zipfile.ZipFile(zip_file) as zf:
-                    zf.extractall(path=out_dir)
-                    names = zf.namelist()
+                    names = extract_archive(zf, out_dir, extraction)
                 print(
                     loc(
                         locale,
@@ -4987,11 +5301,7 @@ def run_crack_pipeline(
                         f"[*] The archive is not encrypted. Extracted {len(names)} file(s) to '{out_dir}'. Nested mode will scan it for inner ZIPs...",
                     )
                 )
-                outcome.success = True
-                outcome.extracted = True
-                outcome.extracted_dir = out_dir
-                outcome.extracted_names = list(names)
-                return outcome
+                return extracted_outcome()
             except Exception as exc:
                 print(
                     loc(
@@ -5012,6 +5322,9 @@ def run_crack_pipeline(
         return outcome
 
     if is_truly_encrypted:
+        if archive_profile["aes_entries"] and not pyzipper_ready:
+            print(loc(locale, "[!] 缺少 AES 解压依赖 pyzipper，原包已保留。", "[!] AES extraction requires pyzipper; the original archive was kept."))
+            return outcome
         print(
             loc(
                 locale,
@@ -5021,11 +5334,11 @@ def run_crack_pipeline(
         )
         try:
             with zipfile.ZipFile(zip_file) as zf:
-                if not kpa_plain_path and not use_bkcrack_recover:
+                if not kpa_requested:
                     # 短明文 CRC32 枚举恢复；若包内条目全部由此完成则直接结束流程
-                    if get_crc(zip_file, zf, locale, interactive=options.interactive):
-                        outcome.success = True
-                        return outcome
+                    if get_crc(zip_file, zf, locale, interactive=options.interactive,
+                               out_dir=out_dir, extraction_context=extraction):
+                        return extracted_outcome()
         except zipfile.BadZipFile:
             print(
                 loc(
@@ -5109,10 +5422,9 @@ def run_crack_pipeline(
                         out_dir,
                         locale,
                         bk_tool,
+                        extraction_context=extraction,
                     ):
-                        outcome.success = True
-                        outcome.extracted = True
-                        outcome.extracted_dir = out_dir
+                        return extracted_outcome()
                     return outcome
 
                 if bk_tool:
@@ -5130,11 +5442,9 @@ def run_crack_pipeline(
                         out_dir,
                         locale,
                         bk_tool,
+                        extraction_context=extraction,
                     ):
-                        outcome.success = True
-                        outcome.extracted = True
-                        outcome.extracted_dir = out_dir
-                        return outcome
+                        return extracted_outcome()
                     print(
                         loc(
                             locale,
@@ -5161,7 +5471,7 @@ def run_crack_pipeline(
             finally:
                 cleanup_known_plaintext_attempts(kpa_attempts)
 
-        verifier = PasswordVerifier(zip_file, **(kpa_ctx or {}))
+        verifier = PasswordVerifier(zip_file, extraction_context=extraction, **(kpa_ctx or {}))
 
         if dict_path_or_mask_flag == "-m":
             if not mask_value:
@@ -5174,11 +5484,9 @@ def run_crack_pipeline(
                 )
                 return outcome
             if crack_password_with_mask(
-                zip_file, mask_value, verifier, locale, out_dir
+                zip_file, mask_value, verifier, locale, out_dir, interactive=options.interactive
             ):
-                outcome.success = True
-                outcome.extracted = True
-                outcome.extracted_dir = out_dir
+                return extracted_outcome()
             return outcome
 
         print(
@@ -5197,16 +5505,17 @@ def run_crack_pipeline(
                 locale,
                 out_dir,
             ):
-                outcome.success = True
-                outcome.extracted = True
-                outcome.extracted_dir = out_dir
+                return extracted_outcome()
             return outcome
 
         found = False
-        if os.path.exists("password_list.txt"):
+        built_in_dict = "password_list.txt"
+        if not os.path.isfile(built_in_dict):
+            built_in_dict = os.path.join(os.path.dirname(os.path.abspath(__file__)), "password_list.txt")
+        if os.path.isfile(built_in_dict):
             found = crack_password_with_file(
                 zip_file,
-                "password_list.txt",
+                built_in_dict,
                 verifier,
                 locale,
                 out_dir,
@@ -5221,24 +5530,20 @@ def run_crack_pipeline(
             )
 
         if found:
-            outcome.success = True
-            outcome.extracted = True
-            outcome.extracted_dir = out_dir
+            return extracted_outcome()
+        if verifier.extraction_error:
             return outcome
         if crack_with_generated_numeric_dict(zip_file, verifier, locale, out_dir):
-            outcome.success = True
-            outcome.extracted = True
-            outcome.extracted_dir = out_dir
+            return extracted_outcome()
+        if verifier.extraction_error:
             return outcome
         if basic_default_mode and offer_template_kpa_after_standard_failures(
             zip_file,
             out_dir,
             locale,
+            extraction_context=extraction,
         ):
-            outcome.success = True
-            outcome.extracted = True
-            outcome.extracted_dir = out_dir
-            return outcome
+            return extracted_outcome()
         return outcome
 
     outcome.success = True
@@ -5431,6 +5736,28 @@ def run_cli(locale: str = "zh") -> int:
             elif arg == "--keep-nested-zips":
                 options.keep_nested_zips = True
                 index += 1
+            elif arg in ("--max-archives", "--max-total-size"):
+                if index + 1 >= len(sys.argv):
+                    print(loc(locale, f"[!] {arg} 缺少参数。", f"[!] Missing value for {arg}."))
+                    return 1
+                try:
+                    value = sys.argv[index + 1]
+                    if arg == "--max-total-size":
+                        match = re.fullmatch(r"([0-9]+)\s*(B|KiB|MiB|GiB)?", value, re.IGNORECASE)
+                        if not match:
+                            raise ValueError(value)
+                        units = {"b": 1, "kib": 1024, "mib": 1024**2, "gib": 1024**3}
+                        parsed = int(match.group(1)) * units[(match.group(2) or "B").lower()]
+                        options.nested_max_total_size = parsed
+                    else:
+                        parsed = int(value)
+                        options.nested_max_archives = parsed
+                    if parsed < 1:
+                        raise ValueError(value)
+                except ValueError:
+                    print(loc(locale, f"[!] {arg} 的限制值无效: {value}", f"[!] Invalid limit for {arg}: {value}"))
+                    return 1
+                index += 2
             else:
                 if options.dict_path_or_mask_flag is None:
                     options.dict_path_or_mask_flag = arg
@@ -5447,20 +5774,16 @@ def run_cli(locale: str = "zh") -> int:
 
         outcome = run_crack_pipeline(zip_file, locale, options)
         if outcome.success and outcome.extracted and options.recursive:
-            initial_zips = None
-            if outcome.extracted_names:
-                extracted_root = outcome.extracted_dir or options.out_dir
-                initial_zips = [
-                    os.path.join(extracted_root, name)
-                    for name in outcome.extracted_names
-                ]
-            run_nested_extraction(
-                scan_root=outcome.extracted_dir or options.out_dir,
-                base_dir=options.out_dir,
+            extracted_root = outcome.extracted_dir or options.out_dir
+            initial_zips = [os.path.join(extracted_root, name) for name in outcome.extracted_names]
+            summary = run_nested_extraction(
+                scan_root=extracted_root,
+                base_dir=extracted_root,
                 locale=locale,
                 options=options,
                 initial_zips=initial_zips,
             )
+            return 0 if summary.success else 1
         return 0 if outcome.success else 1
 
     except FileNotFoundError:

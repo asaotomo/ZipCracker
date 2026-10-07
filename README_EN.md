@@ -16,6 +16,7 @@ Use **`ZipCracker_en.py`** for English UI; **`ZipCracker.py`** is the Chinese UI
 - Mask attacks
 - Short-plaintext recovery via CRC32 enumeration (1–6 byte entries)
 - Known-plaintext attack (`-kpa`)
+- Nested ZIP extraction (`-r` / `--recursive`)
 - Auto-extract after a successful crack
 
 If you are new here, these three sections are enough to get started:
@@ -38,7 +39,10 @@ python3 ZipCracker_en.py test02.zip
 # 3. Known-plaintext attack
 python3 ZipCracker_en.py test05.zip -kpa test05_plain.txt
 
-# 4. Huge wordlist (recommended)
+# 4. Nested ZIP extraction
+python3 ZipCracker_en.py outer.zip -r
+
+# 5. Huge wordlist (recommended)
 ZIPCRACKER_SKIP_DICT_COUNT=1 python3 ZipCracker_en.py target.zip huge_dict.txt
 ```
 
@@ -272,6 +276,37 @@ Difference:
 ```bash
 python3 ZipCracker_en.py test02.zip -o output_dir
 ```
+
+#### 8. Nested ZIP extraction
+
+```bash
+python3 ZipCracker_en.py outer.zip -r
+python3 ZipCracker_en.py outer.zip my_dict.txt -r --max-total-size 8GiB --max-archives 10000
+```
+
+Only ZIPs produced by the current extraction are processed. Unencrypted layers are extracted directly; encrypted layers reuse the dictionary or mask settings. Each nested archive gets a separate, flat `nested_NNNN_name` directory so long chains do not accumulate long paths. The original input is always kept. Intermediate archives are removed only after **complete, verified extraction**; failed or limited archives are kept and listed.
+
+| Option | Behavior |
+| :--- | :--- |
+| `-r`, `--recursive` | Enable nested extraction |
+| `--max-depth N` | Maximum inner depth; default 2048, outer archive is depth 0 |
+| `--max-archives N` | Maximum archive count including the outer archive; default 4096 |
+| `--max-total-size SIZE` | Cumulative extracted bytes; default 1GiB; accepts bytes, KiB, MiB, GiB |
+| `--keep-nested-zips` | Keep successfully extracted intermediate archives |
+
+Size accounting includes intermediate ZIPs and bytes written by failed attempts. Deleting intermediate ZIPs does not restore the budget. These limits apply to recursive mode only. The outer archive keeps the usual interactive workflow; inner layers do not repeatedly prompt for CRC32 enumeration or dependency installation. KPA plaintext/template settings apply only to the outer archive. Exit status is `0` for complete success and `1` if any inner archive remains unresolved or a limit is reached.
+
+All extraction modes stage and verify the complete contents before publishing results to the original output paths. Unrelated existing files are kept. Colliding old files are first saved to a sibling `outputname_backup_random` directory. If the input ZIP is inside the output directory, extraction uses an isolated `archivename_extracted` subdirectory to protect it. Traversal paths and symlink members are rejected.
+
+### Version and tests
+
+Current version: `2.2.0`. See [CHANGELOG.md](./CHANGELOG.md). Existing commands, both language entry points, and optional dependency installation remain supported.
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Tests generate temporary fixtures. Integration tests for `pyzipper`, Info-ZIP `zip`, and `bkcrack` run when those optional tools are installed and are skipped otherwise.
 
 ### Huge wordlists
 
