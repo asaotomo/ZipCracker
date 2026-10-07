@@ -3081,7 +3081,7 @@ def extract_with_bkcrack_keys(
                                 context.budget.consume(len(chunk))
                             output.write(chunk)
                 extracted_names.append(name)
-            extracted_names = sorted(os.path.relpath(os.path.join(root, name), staging)
+            extracted_names = sorted(os.path.relpath(os.path.join(root, name), staging).replace(os.sep, "/")
                                      for root, _, files in os.walk(staging) for name in files)
     except Exception as exc:
         return False, str(exc)
@@ -3149,7 +3149,7 @@ def extraction_plan(zf, context: ExtractionContext) -> list[tuple[object, str]]:
         ):
             raise ValueError(f"不安全的 ZIP 路径 / Unsafe ZIP member: {info.filename!r}")
         name = "/".join(parts)
-        key = os.path.normcase(name)
+        key = os.path.normcase(name).replace("\\", "/")
         is_dir = info.is_dir()
         if key in seen and seen[key] != is_dir:
             raise ValueError(f"ZIP 路径冲突 / Conflicting ZIP member: {name!r}")
@@ -3264,7 +3264,7 @@ def extract_archive(zf, out_dir: str, context: Optional[ExtractionContext] = Non
             names.append(name)
         # A ZIP may contain duplicate names. Match extractall's last-entry-wins
         # behavior while returning each actual output file exactly once.
-        names = sorted(os.path.relpath(os.path.join(root, name), staging)
+        names = sorted(os.path.relpath(os.path.join(root, name), staging).replace(os.sep, "/")
                        for root, _, files in os.walk(staging) for name in files)
     context.names = names
     context.completed = True
@@ -5550,8 +5550,28 @@ def run_crack_pipeline(
     return outcome
 
 
+def configure_console(locale: str) -> None:
+    """Keep supported/user-selected encodings; avoid crashes on redirected Windows output."""
+    probe = loc(locale, "中文└─", "└─")
+    for stream in (sys.stdout, sys.stderr):
+        encoding = getattr(stream, "encoding", None)
+        if not encoding or not hasattr(stream, "reconfigure"):
+            continue
+        settings = {"errors": "backslashreplace"}
+        try:
+            probe.encode(encoding)
+        except (UnicodeEncodeError, LookupError):
+            if not os.environ.get("PYTHONIOENCODING"):
+                settings["encoding"] = "utf-8"
+        try:
+            stream.reconfigure(**settings)
+        except (OSError, ValueError):
+            pass
+
+
 def run_cli(locale: str = "zh") -> int:
     try:
+        configure_console(locale)
         print_banner(locale)
 
         if len(sys.argv) < 2:

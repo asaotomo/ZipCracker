@@ -40,7 +40,7 @@ class RecursiveTests(unittest.TestCase):
         result = subprocess.run([sys.executable, str(REPO / script), *map(str, args)],
                                 cwd=self.root, env=self.env, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, timeout=timeout)
+                                text=True, encoding="utf-8", errors="replace", timeout=timeout)
         self.assertEqual(result.returncode, expected, result.stdout[-6000:])
         self.assertNotIn("Traceback", result.stdout)
         self.assertFalse(list(self.root.rglob(".zipcracker-extract-*")))
@@ -275,6 +275,11 @@ class RecursiveTests(unittest.TestCase):
 
     def test_english_cli(self):
         self.run_cli(self.chain(), "-r", "-o", self.out, script="ZipCracker_en.py")
+        self.assertEqual(len(list(self.out.rglob("final.txt"))), 1)
+
+    def test_legacy_output_encoding_does_not_crash(self):
+        self.env["PYTHONIOENCODING"] = "cp1252"
+        self.run_cli(self.chain(), "-r", "-o", self.out)
         self.assertEqual(len(list(self.out.rglob("final.txt"))), 1)
 
     def test_invalid_limits(self):

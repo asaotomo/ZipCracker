@@ -8,6 +8,7 @@
 - Report unresolved inner archives and resource limits through the CLI exit status. Keep the original input archive.
 - Reject traversal paths and symlink members. Preserve standard duplicate-member last-entry-wins behavior.
 - Find the bundled dictionary when launched from another working directory, while preserving the priority of a user-provided `password_list.txt` in the current directory.
+- Prevent Chinese/Unicode CLI output from crashing under legacy Windows encodings, including redirected output; preserve explicit encoding choices with escaped fallback for unsupported characters.
 - Count CRC32 recovery only when a candidate is actually found; save fully recovered short plaintext files to the output directory.
 - Stream large password-verification entries, pseudo-encryption repair, and bkcrack fallback extraction. Correct ZIP LZMA fallback decoding and validate fallback output sizes and CRCs.
 - Retain existing dictionary/mask/KPA commands, numeric fallback, streaming dictionary controls, Chinese/English entry points, and optional AES/bkcrack support. Add regression tests and Linux/macOS/Windows CI, including a Python 3.7 compatibility job.
