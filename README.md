@@ -320,6 +320,9 @@ python3 ZipCracker.py outer.zip -r
 python3 ZipCracker.py test06.zip -r
 ```
 
+<img width="1547" height="940" alt="image" src="https://github.com/user-attachments/assets/e324f9d7-8309-4b27-8c3a-99cdbdfbc96d" />
+
+
 可选参数：
 
 | 参数 | 说明 |
@@ -518,4 +521,5 @@ clawhub install zipcracker
 
 **【战队知识星球】福利大放送**
 
-<img height="380" alt="image" src="https://github.com/user-attachments/assets/c9999f9c-2f24-4aca-9b42-c6c58f5d4083" />
+<img width="380" alt="星球优惠券" src="https://github.com/user-attachments/assets/5d68553e-0b70-44a4-b26d-a019c9a8d3dd" />
+
