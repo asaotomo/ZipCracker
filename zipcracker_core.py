@@ -76,6 +76,7 @@ STREAM_READ_CHUNK_SIZE = 1024 * 1024
 PYPI_TUNA_SIMPLE_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
 LOG_TIME_FORMAT = "%H:%M:%S"
 LOG_PREFIX_MARKERS = ("[+]", "[*]", "[!]", "[-]", "[?]")
+BATCH_MODE = False
 
 COMMON_EXTRA_PASSWORDS = (
     "password",
@@ -203,6 +204,7 @@ class ZipCrackerOptions:
     extraction_budget: Optional[ExtractionBudget] = None
     keep_nested_zips: bool = False
     interactive: bool = True
+    batch: bool = False
     basic_default_mode: bool = False
 
 
@@ -1669,13 +1671,21 @@ def prompt_yes_no(
     en_prompt: str,
     *,
     env_name: Optional[str] = None,
+    batch_answer: bool = False,
 ) -> bool:
+    """通用 y/n 询问。
+
+    batch_answer 指定 --batch 模式下的自动答案：调用方应选择“同意”或“更安全”
+    的默认值——涉及安装/改环境的询问选 False 跳过，纯本地计算的询问可选 True。
+    """
     if env_name:
         env_value = os.environ.get(env_name, "").strip().lower()
         if env_value in ("1", "true", "yes", "y", "on"):
             return True
         if env_value in ("0", "false", "no", "n", "off"):
             return False
+    if BATCH_MODE:
+        return batch_answer
     if not sys.stdin.isatty():
         return False
 
@@ -1744,6 +1754,7 @@ def offer_pyzipper_install(locale: str, zip_file: str) -> bool:
             locale,
             "[?] 是否现在执行 pyzipper 一键自动安装？输入 n 可跳过继续当前任务。 (y/n): ",
             "[?] Install pyzipper now? Enter n to skip and continue the current task. (y/n): ",
+            batch_answer=False,
         )
 
     if not should_install:
@@ -1858,6 +1869,7 @@ def offer_bkcrack_install(locale: str, *, required: bool) -> Optional[str]:
         "[?] 是否现在执行一键自动安装并继续当前任务？ (y/n): ",
         "[?] Install bkcrack now and continue the current task? (y/n): ",
         env_name=BKCRACK_AUTO_INSTALL_ENV,
+        batch_answer=False,
     )
     if not should_install:
         if required:
@@ -2451,6 +2463,7 @@ def offer_template_kpa_after_standard_failures(
         locale,
         "[?] 是否现在自动尝试这些内置 KPA 模板？(y/n): ",
         "[?] Try these built-in KPA templates now? (y/n): ",
+        batch_answer=True,
     )
     if not should_try:
         print(
@@ -3339,7 +3352,7 @@ def get_crc(
         for name in file_list
         if 0 < zf.getinfo(name).file_size <= 6
     ]
-    if short_entries and (not interactive or not sys.stdin.isatty()):
+    if short_entries and not BATCH_MODE and (not interactive or not sys.stdin.isatty()):
         count = len(short_entries)
         print(
             loc(
@@ -3353,15 +3366,25 @@ def get_crc(
     for filename in file_list:
         info = zf.getinfo(filename)
         if 0 < info.file_size <= 6:
-            choice = input(
-                timestamped_prompt(
+            if BATCH_MODE:
+                print(
                     loc(
                         locale,
-                        f'[!] 压缩包 {zip_file} 中的 {filename} 为短明文（{info.file_size} 字节），是否进行短明文 CRC32 枚举恢复？（y/n）',
-                        f'[!] "{filename}" in "{zip_file}" is short plaintext ({info.file_size} bytes). Run short-plaintext CRC32 enumeration recovery? (y/n) ',
+                        f"[*] 批量模式：自动同意对 {filename}（{info.file_size} 字节）执行短明文 CRC32 枚举恢复。",
+                        f"[*] Batch mode: automatically consenting to CRC32 enumeration for {filename} ({info.file_size} bytes).",
                     )
                 )
-            )
+                choice = "y"
+            else:
+                choice = input(
+                    timestamped_prompt(
+                        loc(
+                            locale,
+                            f'[!] 压缩包 {zip_file} 中的 {filename} 为短明文（{info.file_size} 字节），是否进行短明文 CRC32 枚举恢复？（y/n）',
+                            f'[!] "{filename}" in "{zip_file}" is short plaintext ({info.file_size} bytes). Run short-plaintext CRC32 enumeration recovery? (y/n) ',
+                        )
+                    )
+                )
             if choice.strip().lower() == "y":
                 print(
                     loc(
@@ -4541,12 +4564,12 @@ def crack_password_with_mask(
 ) -> bool:
     token_groups, total_passwords = parse_mask(mask)
     if total_passwords > 100_000_000_000:
-        if not interactive or not sys.stdin.isatty():
+        if BATCH_MODE or not interactive or not sys.stdin.isatty():
             print(
                 loc(
                     locale,
-                    f"[!] 非交互模式下拒绝超大掩码（共 {total_passwords:,} 种组合），请缩小范围或在交互终端运行。",
-                    f"[!] Refusing an oversized mask in non-interactive mode ({total_passwords:,} combinations). Narrow the mask or use an interactive terminal.",
+                    f"[!] 批量/非交互模式下拒绝超大掩码（共 {total_passwords:,} 种组合），请缩小范围或在交互终端运行。",
+                    f"[!] Refusing an oversized mask in batch/non-interactive mode ({total_passwords:,} combinations). Narrow the mask or use an interactive terminal.",
                 )
             )
             return False
@@ -4852,6 +4875,7 @@ def print_usage(locale: str, script_name: str) -> None:
         raw_print("         └─ Defaults: depth 2048, archives 4096 (including outer), total extraction 1GiB. Failed archives and original input are kept; --keep-nested-zips also keeps successful intermediate ZIPs.")
         raw_print("\n--- Optional Arguments ---")
         raw_print(f"[*] Specify Output Directory: python {script_name} ... -o YourOutDir")
+        raw_print("[*] Batch mode: --batch  (answer every prompt automatically with consent or the safer default)")
         raw_print("[*] KPA offset: --kpa-offset 78")
         raw_print("[*] KPA extra bytes: -x 0 4d5a  (repeatable; also accepts 0:4d5a)")
         raw_print(f"[*] KPA templates: --kpa-template {' | '.join(KPA_TEMPLATE_CHOICES)}")
@@ -4880,6 +4904,7 @@ def print_usage(locale: str, script_name: str) -> None:
     raw_print("         └─ 默认深度 2048、包数量 4096（含最外层）、累计解压 1GiB；失败包和最外层输入始终保留，--keep-nested-zips 也保留成功的中间包。")
     raw_print("\n--- 可选参数 ---")
     raw_print(f"[*] 指定输出目录:  python {script_name} ... -o YourOutDir")
+    raw_print("[*] 批量模式:      --batch  (所有询问自动选择同意或更安全的默认选项，类似 sqlmap --batch)")
     raw_print("[*] KPA 偏移量:    --kpa-offset 78")
     raw_print("[*] KPA 附加字节:  -x 0 4d5a  (可重复；也支持 0:4d5a)")
     raw_print(f"[*] KPA 模板:      --kpa-template {' | '.join(KPA_TEMPLATE_CHOICES)}")
@@ -5570,6 +5595,7 @@ def configure_console(locale: str) -> None:
 
 
 def run_cli(locale: str = "zh") -> int:
+    global BATCH_MODE
     try:
         configure_console(locale)
         print_banner(locale)
@@ -5756,6 +5782,9 @@ def run_cli(locale: str = "zh") -> int:
             elif arg == "--keep-nested-zips":
                 options.keep_nested_zips = True
                 index += 1
+            elif arg == "--batch":
+                options.batch = True
+                index += 1
             elif arg in ("--max-archives", "--max-total-size"):
                 if index + 1 >= len(sys.argv):
                     print(loc(locale, f"[!] {arg} 缺少参数。", f"[!] Missing value for {arg}."))
@@ -5791,6 +5820,16 @@ def run_cli(locale: str = "zh") -> int:
         options.basic_default_mode = (
             options.dict_path_or_mask_flag is None and not kpa_requested
         )
+
+        BATCH_MODE = options.batch
+        if options.batch:
+            print(
+                loc(
+                    locale,
+                    "[*] 批量模式（--batch）已启用：所有交互询问将自动选择同意或更安全的默认选项。",
+                    "[*] Batch mode (--batch) enabled: interactive prompts are answered automatically with consent or the safer default.",
+                )
+            )
 
         outcome = run_crack_pipeline(zip_file, locale, options)
         if outcome.success and outcome.extracted and options.recursive:

@@ -19,6 +19,7 @@
 - 短明文 CRC32 枚举恢复
 - 已知明文攻击（`-kpa`）
 - 套娃解压（`-r`，递归处理嵌套压缩包）
+- 批量模式（`--batch`，自动应答所有交互询问）
 - 破解成功后自动解压
 
 如果你只是第一次使用，这份 README 看下面 3 个部分就够了：
@@ -46,6 +47,9 @@ python3 ZipCracker.py outer.zip -r
 
 # 5. 超大字典推荐写法
 ZIPCRACKER_SKIP_DICT_COUNT=1 python3 ZipCracker.py target.zip huge_dict.txt
+
+# 6. 批量模式（自动应答所有交互询问）
+python3 ZipCracker.py test02.zip --batch
 ```
 
 下载并解压完整 ZIP 包后，在其中的 `ZipCracker-v2.2.0` 目录运行。`outer.zip`、`target.zip` 和 `huge_dict.txt` 为示例路径，请替换成自己的文件；`test01.zip`～`test05.zip` 是随包提供的样例。
@@ -334,9 +338,29 @@ python3 ZipCracker.py outer.zip my_dict.txt -r --max-total-size 8GiB --max-archi
 
 输出目录与备份规则见[指定输出目录](#7-指定输出目录)。
 
+#### 9. 批量模式（`--batch`）
+
+参考 sqlmap 的 `--batch`：所有交互询问不再等待键盘输入，自动选择「同意」或「更安全」的默认选项：
+
+```bash
+python3 ZipCracker.py enc.zip --batch
+python3 ZipCracker.py outer.zip my_dict.txt -r --batch
+```
+
+各询问的自动选择：
+
+| 询问 | 批量模式下的选择 |
+| :--- | :--- |
+| 短明文 CRC32 枚举恢复 | 自动同意（纯本地计算） |
+| 自动尝试内置 KPA 模板 | 自动同意（纯本地计算） |
+| `pyzipper` / `bkcrack` 一键安装 | 自动跳过（不改动当前环境） |
+| 超过 1000 亿组合的超大掩码 | 自动中止（更安全；请缩小范围后重试） |
+
+批量模式可与 `-r` 组合实现全自动多层处理，资源消耗仍受 `--max-depth` / `--max-archives` / `--max-total-size` 上限约束。安装类询问也可用 `ZIPCRACKER_AUTO_INSTALL_PYZIPPER` / `ZIPCRACKER_AUTO_INSTALL_BKCRACK` 环境变量强制指定。
+
 ### 非交互运行与退出码
 
-在脚本、流水线或输入被重定向时，程序会跳过 CRC32 枚举和手动安装询问，继续可用的恢复流程；是否自动安装依赖也可通过文末的环境变量配置。超过 1000 亿组合的掩码需要在交互终端确认，非交互环境会停止并提示缩小范围。
+在脚本、流水线或输入被重定向时，程序会跳过 CRC32 枚举和手动安装询问，继续可用的恢复流程；是否自动安装依赖也可通过文末的环境变量配置。超过 1000 亿组合的掩码需要在交互终端确认，非交互环境会停止并提示缩小范围。需要完全无人值守时，可显式加 `--batch`（见[批量模式](#9-批量模式--batch)），所有询问按上表自动应答。
 
 - `0`：所请求的处理成功；套娃模式下所有发现的内层包均处理完成
 - `1`：处理失败，或套娃模式仍有未恢复、损坏或因资源限制而跳过的包
