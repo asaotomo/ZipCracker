@@ -1,0 +1,46 @@
+name: Regression tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }} / AES ${{ matrix.aes }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            python: '3.7'
+            aes: true
+          - os: ubuntu-latest
+            python: '3.10'
+            aes: true
+          - os: ubuntu-latest
+            python: '3.14'
+            aes: true
+          - os: ubuntu-latest
+            python: '3.14'
+            aes: false
+          - os: macos-latest
+            python: '3.14'
+            aes: true
+          - os: windows-latest
+            python: '3.14'
+            aes: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - if: matrix.aes
+        run: python -m pip install pyzipper
+      - run: python -m unittest discover -s tests -v

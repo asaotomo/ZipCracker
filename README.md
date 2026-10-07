@@ -14,6 +14,7 @@
 - 掩码爆破
 - 短明文 CRC32 枚举恢复
 - 已知明文攻击（`-kpa`）
+- 套娃解压（`-r`，递归处理嵌套压缩包）
 - 破解成功后自动解压
 
 如果你只是第一次使用，这份 README 看下面 3 个部分就够了：
@@ -36,7 +37,10 @@ python3 ZipCracker.py test02.zip
 # 3. 已知明文攻击
 python3 ZipCracker.py test05.zip -kpa test05_plain.txt
 
-# 4. 超大字典推荐写法
+# 4. 套娃解压（递归处理嵌套压缩包）
+python3 ZipCracker.py 1000.zip -r
+
+# 5. 超大字典推荐写法
 ZIPCRACKER_SKIP_DICT_COUNT=1 python3 ZipCracker.py target.zip huge_dict.txt
 ```
 
@@ -283,6 +287,53 @@ python3 ZipCracker.py test05.zip -kpa test05_plain.txt --bkcrack
 python3 ZipCracker.py test02.zip -o output_dir
 ```
 
+#### 8. 套娃解压（递归处理嵌套压缩包）
+
+有的题目是压缩包套压缩包，一层套一层动辄上百层。加上 `-r` / `--recursive` 后，ZipCracker 会在当前压缩包完整解压成功后，只扫描本次产生的嵌套 ZIP，并复用字典/掩码设置逐层处理：
+
+```bash
+python3 ZipCracker.py 1000.zip -r
+```
+
+行为说明：
+
+1. 未加密的层会直接解压并继续向下扫描
+2. 每一层解压到输出目录下独立的 `nested_序号_包名` 目录，避免同名覆盖，也避免上千层链路在 Windows 上触发超长路径问题
+3. 只有完整解压成功的中间压缩包才会自动删除；最外层输入包始终保留。想保留所有中间包请加 `--keep-nested-zips`
+4. 深度、包数量、累计解压字节数均有上限，达到限制时保留未处理包；内层未完成时退出码为 `1`，全部完成为 `0`
+5. 嵌套层不重复询问 CRC32 枚举或安装依赖；最外层仍保留交互流程。KPA 明文/模板参数仅作用于最外层，内层复用字典/掩码
+6. 损坏包、部分条目解压失败或密码不一致的包会保留，并在结束时统一列出
+
+可选参数：
+
+| 参数 | 说明 |
+| :--- | :--- |
+| `-r`, `--recursive` | 启用套娃解压 |
+| `--max-depth N` | 最大递归深度，默认 2048 |
+| `--max-archives N` | 包数量上限，包含最外层，默认 4096 |
+| `--max-total-size SIZE` | 累计解压上限，默认 1GiB；支持字节数、KiB、MiB、GiB |
+| `--keep-nested-zips` | 保留已处理成功的中间压缩包 |
+
+例如，处理更大的多层归档：
+
+```bash
+python3 ZipCracker.py outer.zip my_dict.txt -r --max-total-size 8GiB --max-archives 10000
+```
+
+累计解压量包含各层产生的中间 ZIP，以及失败尝试已写入的字节；删除中间包不会返还预算。上述资源限制仅作用于套娃模式，原有单包用法不受该默认上限影响。
+
+所有解压流程都会先将内容完整提取到临时目录并验证，再交付到原来的输出路径。输出目录里无关的文件会保留；同名旧文件先备份到输出目录旁的 `目录名_backup_随机串`，然后更新结果。输入 ZIP 位于输出目录内时，结果使用独立的 `包名_extracted` 子目录，保护输入包。路径越界和符号链接条目会被拒绝。
+
+### 版本与测试
+
+当前版本：`2.2.0`。变化见 [CHANGELOG.md](./CHANGELOG.md)。旧命令、两种语言入口及可选依赖方式保持兼容。
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+测试仅生成临时样例。安装 `pyzipper`、Info-ZIP 的 `zip` 和 `bkcrack` 后可运行对应集成测试；未安装时仅跳过对应项目。
+
 ### 超大字典怎么用
 
 ZipCracker 可以处理很大的字典，不会一次性把整份字典读进内存。
@@ -437,5 +488,4 @@ clawhub install zipcracker
 **【战队知识星球】福利大放送**
 
 <img height="380" alt="image" src="https://github.com/user-attachments/assets/c9999f9c-2f24-4aca-9b42-c6c58f5d4083" />
-
 
