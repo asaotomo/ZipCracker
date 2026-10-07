@@ -301,6 +301,7 @@ The bundled `test06.zip` is a five-layer nested sample whose layers take four di
 ```bash
 python3 ZipCracker_en.py test06.zip -r
 ```
+<img width="1547" height="940" alt="image" src="https://github.com/user-attachments/assets/f4a8860f-c518-459a-a732-3441bbb60b5a" />
 
 | Option | Behavior |
 | :--- | :--- |
@@ -481,4 +482,4 @@ Do **not** use it for unauthorized access or other illegal purposes.
 
 **Team knowledge planet**
 
-<img height="380" alt="Knowledge planet" src="https://github.com/user-attachments/assets/c9999f9c-2f24-4aca-9b42-c6c58f5d4083" />
+<img height="380" alt="Knowledge planet" src="https://github.com/user-attachments/assets/5d68553e-0b70-44a4-b26d-a019c9a8d3dd" />
