@@ -21,6 +21,7 @@ Use **`ZipCracker_en.py`** for English UI; **`ZipCracker.py`** is the Chinese UI
 - Short-plaintext recovery via CRC32 enumeration (1–6 byte entries)
 - Known-plaintext attack (`-kpa`)
 - Nested ZIP extraction (`-r` / `--recursive`)
+- Batch mode (`--batch`, answers every interactive prompt automatically)
 - Auto-extract after a successful crack
 
 If you are new here, these three sections are enough to get started:
@@ -48,6 +49,9 @@ python3 ZipCracker_en.py outer.zip -r
 
 # 5. Huge wordlist (recommended)
 ZIPCRACKER_SKIP_DICT_COUNT=1 python3 ZipCracker_en.py target.zip huge_dict.txt
+
+# 6. Batch mode (answers every interactive prompt automatically)
+python3 ZipCracker_en.py test02.zip --batch
 ```
 
 Download and extract the complete bundle, then run these commands from its `ZipCracker-v2.2.0` directory. Replace `outer.zip`, `target.zip`, and `huge_dict.txt` with your own paths. `test01.zip` through `test06.zip` are bundled examples; `test06.zip` is the nested one (see [Nested ZIP extraction](#8-nested-zip-extraction)).
@@ -315,9 +319,29 @@ Size accounting includes intermediate ZIPs and bytes written by failed attempts.
 
 See [Output directory](#7-output-directory) for output and backup behavior.
 
+#### 9. Batch mode (`--batch`)
+
+Modeled after sqlmap's `--batch`: interactive prompts no longer wait for keyboard input and are answered automatically with consent or the safer default:
+
+```bash
+python3 ZipCracker_en.py enc.zip --batch
+python3 ZipCracker_en.py outer.zip my_dict.txt -r --batch
+```
+
+Automatic answers per prompt:
+
+| Prompt | Answer in batch mode |
+| :--- | :--- |
+| Short-plaintext CRC32 enumeration | Consent automatically (pure local computation) |
+| Trying built-in KPA templates | Consent automatically (pure local computation) |
+| One-click `pyzipper` / `bkcrack` install | Skip automatically (no environment changes) |
+| Masks exceeding 100 billion candidates | Abort automatically (safer; narrow the range and retry) |
+
+Batch mode combines with `-r` for fully unattended multi-layer processing; resource limits (`--max-depth` / `--max-archives` / `--max-total-size`) still apply. Installation prompts can also be forced with the `ZIPCRACKER_AUTO_INSTALL_PYZIPPER` / `ZIPCRACKER_AUTO_INSTALL_BKCRACK` environment variables.
+
 ### Non-interactive execution and exit status
 
-When run from scripts, CI, or with redirected input, manual CRC32 enumeration and installation prompts are skipped and available recovery methods continue. Dependency auto-installation can also be configured through the environment variables listed below. Masks exceeding 100 billion candidates require confirmation in an interactive terminal; non-interactive runs stop and ask you to narrow the range.
+When run from scripts, CI, or with redirected input, manual CRC32 enumeration and installation prompts are skipped and available recovery methods continue. Dependency auto-installation can also be configured through the environment variables listed below. Masks exceeding 100 billion candidates require confirmation in an interactive terminal; non-interactive runs stop and ask you to narrow the range. For fully unattended runs add `--batch` explicitly (see [Batch mode](#9-batch-mode--batch)); every prompt is then answered per the table above.
 
 - `0`: the requested operation succeeded; in recursive mode all discovered inner archives were handled
 - `1`: failure, including unresolved/corrupt inner archives or archives skipped because of resource limits
