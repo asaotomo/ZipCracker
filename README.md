@@ -521,5 +521,4 @@ clawhub install zipcracker
 
 **【战队知识星球】福利大放送**
 
-<img width="380" alt="星球优惠券" src="https://github.com/user-attachments/assets/5d68553e-0b70-44a4-b26d-a019c9a8d3dd" />
-
+<img height="380" alt="知识星球优惠券" src="https://github.com/user-attachments/assets/5d68553e-0b70-44a4-b26d-a019c9a8d3dd" />
