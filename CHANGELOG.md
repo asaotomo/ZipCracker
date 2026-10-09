@@ -13,6 +13,7 @@
 - Verify the selected entry by archive index rather than filename to handle encrypted/clear duplicate names correctly with both ZIP backends. Cache legacy encryption headers for early rejection while retaining complete entry verification, including after a KPA match.
 - Compare known plaintext in 64-byte blocks to reject wrong passwords early, reject empty KPA input, resolve its built-in dictionary outside the project directory, and remove the growing numeric-password deduplication set.
 - Propagate password-worker errors, drain queued tasks on failure/interruption, reject invalid UTF-8 surrogate candidates safely, and avoid reporting unread dictionary bytes as completed after an early stop.
+- Escape unsupported characters in core API output without changing the caller's stream encoding, including backup messages under Windows cp1252.
 
 ## 2.2.0 — 2026-10-07
 

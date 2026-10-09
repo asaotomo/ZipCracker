@@ -270,13 +270,27 @@ def timestamped_prompt(text: str) -> str:
     return prefix_output_lines(text)
 
 
+def _compatible_print(*args, **kwargs) -> None:
+    """Keep caller-selected stream encodings safe even outside the CLI."""
+    stream = kwargs.get("file") or sys.stdout
+    encoding = getattr(stream, "encoding", None)
+    if encoding:
+        def escape(value):
+            return str(value).encode(encoding, errors="backslashreplace").decode(encoding)
+        args = tuple(escape(arg) for arg in args)
+        for key in ("sep", "end"):
+            if isinstance(kwargs.get(key), str):
+                kwargs[key] = escape(kwargs[key])
+    builtins.print(*args, **kwargs)
+
+
 def timestamped_print(*args, **kwargs) -> None:
     sep = kwargs.pop("sep", " ")
     end = kwargs.pop("end", "\n")
     file = kwargs.pop("file", sys.stdout)
     flush = kwargs.pop("flush", False)
     text = sep.join(str(arg) for arg in args) + end
-    builtins.print(
+    _compatible_print(
         prefix_output_lines(text),
         end="",
         file=file,
@@ -286,7 +300,7 @@ def timestamped_print(*args, **kwargs) -> None:
 
 
 def raw_print(*args, **kwargs) -> None:
-    builtins.print(*args, **kwargs)
+    _compatible_print(*args, **kwargs)
 
 
 print = timestamped_print

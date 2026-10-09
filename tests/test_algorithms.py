@@ -74,6 +74,34 @@ class AlgorithmTests(unittest.TestCase):
         self.addCleanup(verifier.close_thread_archive)
         return verifier
 
+    def test_core_output_helpers_preserve_legacy_encoding(self):
+        buffer = io.BytesIO()
+        stream = io.TextIOWrapper(buffer, encoding="cp1252", errors="strict")
+        self.addCleanup(stream.close)
+        core.timestamped_print("[*] 中文", file=stream, flush=True)
+        core.raw_print("中文", file=stream, flush=True)
+        self.assertEqual(stream.encoding, "cp1252")
+        self.assertEqual(buffer.getvalue().count(b"\\u4e2d\\u6587"), 2)
+
+    def test_api_backup_publication_succeeds_with_legacy_stdout(self):
+        destination = self.root / "out"
+        destination.mkdir()
+        (destination / "file.txt").write_bytes(b"old")
+        stage = self.root / "staging"
+        stage.mkdir()
+        (stage / "file.txt").write_bytes(b"new")
+        buffer = io.BytesIO()
+        stream = io.TextIOWrapper(buffer, encoding="cp1252", errors="strict")
+        self.addCleanup(stream.close)
+        with mock.patch.object(core.sys, "stdout", stream):
+            core.publish_extraction(str(stage), str(destination))
+        stream.flush()
+        self.assertIn(b"Previous output files backed up", buffer.getvalue())
+        self.assertEqual((destination / "file.txt").read_bytes(), b"new")
+        backups = list(self.root.glob("out_backup_*/file.txt"))
+        self.assertEqual(len(backups), 1)
+        self.assertEqual(backups[0].read_bytes(), b"old")
+
     def test_crc_recovers_every_one_and_two_byte_message(self):
         for size in (1, 2):
             for value in range(1 << (8 * size)):
