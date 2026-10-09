@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.2.1 — 2026-10-09
+
+- Add `--batch` to both language entry points and the shared pipeline, with explicit per-run options instead of global state. Builds on @halfcity789's proposal in [#23](https://github.com/asaotomo/ZipCracker/pull/23).
+- Automatically recover bounded 1–4 byte CRC32 plaintexts. Require `--crc-candidates` for ambiguous 5–6 byte preimages, save candidates separately, and never count them as complete recovery or allow source cleanup.
+- Directly solve 1–4 byte CRC32 preimages using a cached inverse linear transform, including arbitrary binary bytes. Analyze ambiguous 5–6 byte candidates by enumerating at most 100/10000 printable prefixes and solving the four-byte suffix; budget each solve/prefix as one attempt.
+- Try explicit dictionaries/masks before CRC32, read clear short members directly, skip AES CRC32 metadata, and preserve normalized duplicate-member behavior.
+- Add per-archive CRC32 candidate/time budgets and a shared automatic-template key-search deadline. Batch default nested recovery can reach built-in templates; outer KPA inputs are not reused on inner archives.
+- Skip dependency installation by default in batch mode while honoring explicit installation environment variables; refuse oversized batch masks.
+- Add batch safety, scheduling, timeout, candidate-output and recursive-cleanup regressions, with bilingual usage documentation.
+- Add `test07.zip`, a CTF fixture combining nested weak-password/pseudo-encrypted archives, short CRC32 flag shards and a real collision trap, with a generator, dictionary, validation guide and five end-to-end regressions.
+- Verify the selected entry by archive index rather than filename to handle encrypted/clear duplicate names correctly with both ZIP backends. Cache legacy encryption headers for early rejection while retaining complete entry verification, including after a KPA match.
+- Compare known plaintext in 64-byte blocks to reject wrong passwords early, reject empty KPA input, resolve its built-in dictionary outside the project directory, and remove the growing numeric-password deduplication set.
+- Propagate password-worker errors, drain queued tasks on failure/interruption, reject invalid UTF-8 surrogate candidates safely, and avoid reporting unread dictionary bytes as completed after an early stop.
+
 ## 2.2.0 — 2026-10-07
 
 - Add iterative nested ZIP recovery with `-r` / `--recursive`, flat layer directories, optional intermediate retention, and configurable depth, archive-count and cumulative-size limits.

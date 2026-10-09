@@ -35,8 +35,10 @@ import urllib.error
 import urllib.request
 import zipfile
 import lzma
+import math
 import zlib
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Iterable, Iterator, Optional, Sequence, Tuple
 from zipfile import _ZipDecrypter
 
@@ -61,7 +63,7 @@ CHARSET_LOWER = string.ascii_lowercase
 CHARSET_UPPER = string.ascii_uppercase
 CHARSET_SYMBOLS = string.punctuation
 OUT_DIR_DEFAULT = "unzipped_files"
-ZIPCRACKER_VERSION = "2.2.0"
+ZIPCRACKER_VERSION = "2.2.1"
 BKCRACK_REPO_URL = "https://github.com/kimci86/bkcrack"
 BKCRACK_RELEASES_API = "https://api.github.com/repos/kimci86/bkcrack/releases/latest"
 MSVC_REDIST_URL = "https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist"
@@ -153,6 +155,9 @@ class KpaTargetEntryInfo:
 DEFAULT_NESTED_MAX_DEPTH = 2048
 DEFAULT_NESTED_MAX_ARCHIVES = 4096
 DEFAULT_NESTED_MAX_TOTAL_SIZE = 1024 * 1024 * 1024
+DEFAULT_CRC_MAX_CANDIDATES = 1_000_000
+DEFAULT_CRC_TIMEOUT = 5.0
+DEFAULT_TEMPLATE_KPA_TIMEOUT = 60.0
 NESTED_ARCHIVE_SUFFIXES = (".zip",)
 
 
@@ -204,6 +209,11 @@ class ZipCrackerOptions:
     keep_nested_zips: bool = False
     interactive: bool = True
     basic_default_mode: bool = False
+    batch: bool = False
+    crc_candidates: bool = False
+    crc_max_candidates: int = DEFAULT_CRC_MAX_CANDIDATES
+    crc_timeout: float = DEFAULT_CRC_TIMEOUT
+    template_kpa_timeout: float = DEFAULT_TEMPLATE_KPA_TIMEOUT
 
 
 @dataclass
@@ -1669,6 +1679,9 @@ def prompt_yes_no(
     en_prompt: str,
     *,
     env_name: Optional[str] = None,
+    batch: bool = False,
+    batch_answer: bool = False,
+    interactive: bool = True,
 ) -> bool:
     if env_name:
         env_value = os.environ.get(env_name, "").strip().lower()
@@ -1676,7 +1689,9 @@ def prompt_yes_no(
             return True
         if env_value in ("0", "false", "no", "n", "off"):
             return False
-    if not sys.stdin.isatty():
+    if batch:
+        return batch_answer
+    if not interactive or not sys.stdin.isatty():
         return False
 
     while True:
@@ -1688,7 +1703,7 @@ def prompt_yes_no(
         print(loc(locale, "[!] 请输入 y 或 n。", "[!] Please answer with y or n."))
 
 
-def offer_pyzipper_install(locale: str, zip_file: str) -> bool:
+def offer_pyzipper_install(locale: str, zip_file: str, *, batch: bool = False, interactive: bool = True) -> bool:
     if refresh_pyzipper_state():
         return True
 
@@ -1744,6 +1759,8 @@ def offer_pyzipper_install(locale: str, zip_file: str) -> bool:
             locale,
             "[?] 是否现在执行 pyzipper 一键自动安装？输入 n 可跳过继续当前任务。 (y/n): ",
             "[?] Install pyzipper now? Enter n to skip and continue the current task. (y/n): ",
+            batch=batch,
+            interactive=interactive,
         )
 
     if not should_install:
@@ -1791,7 +1808,7 @@ def offer_pyzipper_install(locale: str, zip_file: str) -> bool:
     return False
 
 
-def offer_bkcrack_install(locale: str, *, required: bool) -> Optional[str]:
+def offer_bkcrack_install(locale: str, *, required: bool, batch: bool = False, interactive: bool = True) -> Optional[str]:
     existing = find_bkcrack_executable()
     if existing:
         return existing
@@ -1858,6 +1875,8 @@ def offer_bkcrack_install(locale: str, *, required: bool) -> Optional[str]:
         "[?] 是否现在执行一键自动安装并继续当前任务？ (y/n): ",
         "[?] Install bkcrack now and continue the current task? (y/n): ",
         env_name=BKCRACK_AUTO_INSTALL_ENV,
+        batch=batch,
+        interactive=interactive,
     )
     if not should_install:
         if required:
@@ -2411,6 +2430,9 @@ def offer_template_kpa_after_standard_failures(
     locale: str,
     *,
     extraction_context: Optional[ExtractionContext] = None,
+    batch: bool = False,
+    interactive: bool = True,
+    timeout: float = DEFAULT_TEMPLATE_KPA_TIMEOUT,
 ) -> bool:
     suggestions = detect_template_kpa_suggestions(zip_path, locale)
     if not suggestions:
@@ -2451,6 +2473,9 @@ def offer_template_kpa_after_standard_failures(
         locale,
         "[?] 是否现在自动尝试这些内置 KPA 模板？(y/n): ",
         "[?] Try these built-in KPA templates now? (y/n): ",
+        batch=batch,
+        batch_answer=True,
+        interactive=interactive,
     )
     if not should_try:
         print(
@@ -2464,11 +2489,15 @@ def offer_template_kpa_after_standard_failures(
 
     bk_tool = find_bkcrack_executable()
     if not bk_tool:
-        bk_tool = offer_bkcrack_install(locale, required=True)
+        bk_tool = offer_bkcrack_install(locale, required=True, batch=batch, interactive=interactive)
         if not bk_tool:
             return False
 
+    deadline = time.monotonic() + timeout if batch else None
     for index, suggestion in enumerate(suggestions, start=1):
+        if deadline is not None and time.monotonic() >= deadline:
+            print(loc(locale, "[!] 自动模板 KPA 时间预算已用尽，保留原包。", "[!] Automatic template KPA time budget exhausted; original kept."))
+            return False
         print(
             loc(
                 locale,
@@ -2492,6 +2521,7 @@ def offer_template_kpa_after_standard_failures(
                 locale,
                 bk_tool,
                 extraction_context=extraction_context,
+                deadline=deadline,
             ):
                 return True
         finally:
@@ -2896,9 +2926,16 @@ def cleanup_known_plaintext_attempts(attempts: Sequence[KnownPlaintextAttempt]) 
 def zipcrypto_plaintext_matches_password(
     password: str, ciphertext: bytes, expected_plaintext: bytes
 ) -> bool:
+    # An empty payload supplies no evidence about a password. Compare in small
+    # chunks so an incorrect guess does not decrypt an entire large entry.
+    if not expected_plaintext or len(ciphertext) != 12 + len(expected_plaintext):
+        return False
     decrypter = _ZipDecrypter(password.encode("utf-8"))
-    plain = decrypter(ciphertext)
-    return plain[12:] == expected_plaintext
+    decrypter(ciphertext[:12])
+    for offset in range(0, len(expected_plaintext), 64):
+        if decrypter(ciphertext[12 + offset:12 + offset + 64]) != expected_plaintext[offset:offset + 64]:
+            return False
+    return True
 
 
 def parse_bkcrack_keys_from_output(text: str) -> Optional[Tuple[str, str, str]]:
@@ -3106,11 +3143,11 @@ def _find_first_file_in_zip(zf) -> Optional[str]:
     return None
 
 
-def find_best_verification_entry(zf) -> Optional[str]:
+def find_best_verification_info(zf):
     try:
         infos = [info for info in zf.infolist() if is_regular_member(info)]
     except Exception:
-        return _find_first_file_in_zip(zf)
+        return None
     if not infos:
         return None
 
@@ -3126,7 +3163,39 @@ def find_best_verification_entry(zf) -> Optional[str]:
             info.filename,
         )
 
-    return min(candidates, key=score).filename
+    return min(candidates, key=score)
+
+
+def find_best_verification_entry(zf) -> Optional[str]:
+    info = find_best_verification_info(zf)
+    return info.filename if info is not None else _find_first_file_in_zip(zf)
+
+
+def read_zipcrypto_check_header(zip_path: str, info) -> Optional[tuple[bytes, int]]:
+    """Cache a rejection filter; successful guesses still need full verification."""
+    if not info.flag_bits & 1 or info.flag_bits & 0x40 or _has_winzip_aes_extra(info):
+        return None
+    with open(zip_path, "rb") as source:
+        source.seek(info.header_offset)
+        local = source.read(30)
+        if len(local) != 30 or local[:4] != b"PK\x03\x04":
+            return None
+        local_flags = struct.unpack_from("<H", local, 6)[0]
+        if (local_flags ^ info.flag_bits) & 0x49 or info.compress_size < 12:
+            return None
+        name_size, extra_size = struct.unpack_from("<HH", local, 26)
+        source.seek(name_size + extra_size, os.SEEK_CUR)
+        header = source.read(12)
+    if len(header) != 12:
+        return None
+    if info.flag_bits & 8:
+        raw_time = getattr(info, "_raw_time", None)
+        if raw_time is None:
+            raw_time = (info.date_time[3] << 11) | (info.date_time[4] << 5) | (info.date_time[5] // 2)
+        check = (raw_time >> 8) & 0xFF
+    else:
+        check = (info.CRC >> 24) & 0xFF
+    return header, check
 
 
 def extraction_plan(zf, context: ExtractionContext) -> list[tuple[object, str]]:
@@ -3293,28 +3362,113 @@ def fix_zip_encrypted(file_path: str, temp_path: str) -> None:
                 info.flag_bits = original_flag_bits
 
 
-def crack_crc(filename: str, crc: int, size: int, locale: str) -> Optional[bytes]:
-    """短明文 CRC32 枚举恢复：穷举可打印明文，直至 binascii.crc32 与 ZIP 条目记录一致。"""
-    candidates = its.product(string.printable, repeat=size)
-    print(
-        loc(
-            locale,
-            "[+] 开始进行短明文 CRC32 枚举恢复······",
-            "[+] Running short-plaintext CRC32 enumeration recovery...",
-        )
-    )
-    for item in candidates:
-        raw = "".join(item).encode()
+@dataclass
+class CrcBudget:
+    """One shared computation budget for all CRC entries in an archive."""
+
+    max_candidates: int = DEFAULT_CRC_MAX_CANDIDATES
+    timeout: float = DEFAULT_CRC_TIMEOUT
+    attempted: int = 0
+    deadline: float = field(init=False)
+    exhausted: bool = field(default=False, init=False)
+
+    def __post_init__(self) -> None:
+        if self.max_candidates < 1 or not math.isfinite(self.timeout) or self.timeout <= 0:
+            raise ValueError("CRC budget must use positive finite limits")
+        self.deadline = time.monotonic() + self.timeout
+
+    def take(self) -> bool:
+        if self.exhausted:
+            return False
+        if self.attempted >= self.max_candidates or (
+            self.attempted % 1024 == 0 and time.monotonic() >= self.deadline
+        ):
+            self.exhausted = True
+            return False
+        self.attempted += 1
+        return True
+
+
+@lru_cache(maxsize=1)
+def _crc32_inverse_basis() -> tuple[tuple[int, int], ...]:
+    """Invert the 32-bit linear CRC map after removing its affine zero offset."""
+    zero_crc = binascii.crc32(bytes(4))
+    basis = [None] * 32
+    for bit in range(32):
+        vector = binascii.crc32((1 << bit).to_bytes(4, "little")) ^ zero_crc
+        raw = 1 << bit
+        while vector:
+            pivot = vector.bit_length() - 1
+            if basis[pivot] is None:
+                basis[pivot] = (vector, raw)
+                break
+            vector ^= basis[pivot][0]
+            raw ^= basis[pivot][1]
+    if any(item is None for item in basis):
+        raise ValueError("CRC32 four-byte map is not invertible")
+    return tuple(basis)
+
+
+def _short_crc_preimage(crc: int, size: int, initial_crc: int = 0) -> Optional[bytes]:
+    """Solve 1–4 arbitrary bytes, rejecting CRCs impossible at the given length."""
+    basis = _crc32_inverse_basis()
+    state = crc ^ binascii.crc32(bytes(size), initial_crc)
+    raw = 0
+    while state:
+        vector, bits = basis[state.bit_length() - 1]
+        state ^= vector
+        raw ^= bits
+    result = raw.to_bytes(4, "little")
+    # Leading zero bytes do not affect the CRC delta relative to all zeros.
+    if any(result[:-size]):
+        return None
+    return result[-size:]
+
+
+def _iter_long_crc_candidates(crc: int, size: int, budget: CrcBudget) -> Iterator[bytes]:
+    """Enumerate 1–2 printable prefix bytes and directly solve the four-byte tail."""
+    printable = frozenset(string.printable.encode("ascii"))
+    for prefix in its.product(string.printable, repeat=size - 4):
+        if not budget.take():
+            return
+        raw = "".join(prefix).encode("ascii")
+        suffix = _short_crc_preimage(crc, 4, binascii.crc32(raw))
+        if all(byte in printable for byte in suffix):
+            yield raw + suffix
+
+
+def crack_crc(
+    filename: str, crc: int, size: int, locale: str, *,
+    budget: Optional[CrcBudget] = None,
+) -> Optional[bytes]:
+    """Solve 1–4 bytes; enumerate ambiguous printable 5–6 byte candidates."""
+    if not 1 <= size <= 6:
+        raise ValueError("CRC enumeration supports 1–6 byte entries")
+    if not 0 <= crc <= 0xFFFFFFFF:
+        raise ValueError("CRC32 must be an unsigned 32-bit integer")
+    budget = budget if budget is not None else CrcBudget()
+    print(loc(locale, "[+] 开始进行短明文 CRC32 恢复······",
+              "[+] Running short-plaintext CRC32 recovery..."))
+    if size <= 4:
+        raw = _short_crc_preimage(crc, size) if budget.take() else None
+        candidates = (raw,) if raw is not None else ()
+    else:
+        candidates = _iter_long_crc_candidates(crc, size, budget)
+    for raw in candidates:
         if crc == binascii.crc32(raw):
-            print(
-                loc(
-                    locale,
-                    f"[*] 短明文 CRC32 枚举恢复成功。\n[*] {filename} 的内容为：{raw.decode()}",
-                    f"[*] Short-plaintext CRC32 enumeration recovery succeeded.\n[*] Content of {filename}: {raw.decode()}",
-                )
-            )
+            if size <= 4:
+                print(loc(locale, f"[*] 已恢复短明文 {filename}: {raw!r}",
+                          f"[*] Recovered short plaintext {filename}: {raw!r}"))
+            else:
+                print(loc(locale, f"[!] {filename} 的 CRC32 候选为 {raw!r}；可能碰撞，不计为验证成功。",
+                          f"[!] CRC32 candidate for {filename}: {raw!r}; collisions are possible, so this is not verified recovery."))
             return raw
-    print(loc(locale, f"[-] 未恢复短明文条目: {filename}", f"[-] Short plaintext was not recovered: {filename}"))
+    if budget.exhausted:
+        print(loc(locale, "[!] CRC32 计算预算已用尽，继续后续破解流程。",
+                  "[!] CRC32 computation budget exhausted; continuing recovery."))
+        return None
+    print(loc(locale, f"[-] 未恢复短明文条目: {filename}",
+              f"[-] Short plaintext was not recovered: {filename}"))
     return None
 
 
@@ -3324,84 +3478,99 @@ def get_crc(
     locale: str,
     *,
     interactive: bool = True,
+    batch: bool = False,
+    allow_candidates: bool = False,
+    max_candidates: int = DEFAULT_CRC_MAX_CANDIDATES,
+    timeout: float = DEFAULT_CRC_TIMEOUT,
     out_dir: Optional[str] = None,
     extraction_context: Optional[ExtractionContext] = None,
 ) -> bool:
-    """若存在 1～6 字节条目，询问是否执行短明文 CRC32 枚举恢复；全部条目均由此完成时跳过字典爆破。"""
-    cracked_all = 0
+    """Only complete, unambiguous recovery can publish output and permit cleanup."""
+    context = extraction_context if extraction_context is not None else ExtractionContext()
+    context.completed = False
+    context.names = []
+    plan = extraction_plan(zf, context)
+    # Match extraction's normalized, last-entry-wins paths, including duplicates.
+    files = {name: info for info, name in plan if not info.is_dir()}
+    if not files:
+        return False
+    short_infos = [info for info in files.values() if info.flag_bits & 1 and 0 < info.file_size <= 6 and not _has_winzip_aes_extra(info)]
+    if short_infos and not (batch or allow_candidates) and (not interactive or not sys.stdin.isatty()):
+        print(loc(locale, "[*] 非交互环境：跳过 CRC32 询问，继续后续破解流程。",
+                  "[*] Non-interactive session: skipping CRC32 prompts and continuing recovery."))
+        return False
+
     recovered = {}
-    file_list = [name for name in zf.namelist() if not name.endswith("/")]
-    if not file_list:
-        return False
-
-    short_entries = [
-        (name, zf.getinfo(name))
-        for name in file_list
-        if 0 < zf.getinfo(name).file_size <= 6
-    ]
-    if short_entries and (not interactive or not sys.stdin.isatty()):
-        count = len(short_entries)
-        print(
-            loc(
+    candidates = {}
+    budget = None
+    for name, info in files.items():
+        if not (info.flag_bits & 1):
+            # Read clear members rather than enumerating their CRCs.
+            if info.file_size <= 6:
+                recovered[name] = zf.read(info)
+            continue
+        if not 0 < info.file_size <= 6 or _has_winzip_aes_extra(info):
+            continue
+        if info.file_size > 4 and not allow_candidates:
+            print(loc(locale, f"[*] 跳过 {name} 的 5～6 字节 CRC32 候选枚举；如需分析可加 --crc-candidates。",
+                      f"[*] Skipping ambiguous 5–6 byte CRC32 enumeration for {name}; use --crc-candidates for candidate analysis."))
+            continue
+        if not allow_candidates:
+            prompt_started = time.monotonic()
+            should_try = prompt_yes_no(
                 locale,
-                f"[*] 检测到 {count} 个短明文条目，但当前为非交互环境，跳过 CRC32 枚举询问，继续后续破解流程。",
-                f"[*] {count} short-plaintext entr{'y' if count == 1 else 'ies'} detected, but this session is non-interactive. Skipping the CRC32 enumeration prompt and continuing.",
+                f"[?] 是否对 {name}（{info.file_size} 字节）进行有预算的 CRC32 恢复？(y/n): ",
+                f"[?] Run bounded CRC32 recovery for {name} ({info.file_size} bytes)? (y/n): ",
+                batch=batch, batch_answer=True, interactive=interactive,
             )
-        )
+            if budget is not None:
+                # Waiting for the user must not consume computation time.
+                budget.deadline += time.monotonic() - prompt_started
+            if not should_try:
+                continue
+        if budget is None:
+            budget = CrcBudget(max_candidates=max_candidates, timeout=timeout)
+        raw = crack_crc(name, info.CRC, info.file_size, locale, budget=budget)
+        if raw is not None:
+            if info.file_size <= 4:
+                recovered[name] = raw
+            else:
+                candidates[name] = raw
+
+    if candidates and out_dir is not None:
+        candidate_dir = resolve_extraction_destination(zip_file, os.path.abspath(out_dir) + "_crc_candidates")
+        with staged_output(candidate_dir) as staging:
+            for name, raw in candidates.items():
+                target = os.path.join(staging, *name.split("/"))
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                if context.budget:
+                    context.budget.consume(len(raw))
+                with open(target, "wb") as fp:
+                    fp.write(raw)
+        print(loc(locale, f"[!] 未验证候选已单独保存到 {candidate_dir}；保留原包并继续验证。",
+                  f"[!] Unverified candidates saved separately to {candidate_dir}; keeping the archive and continuing verification."))
+
+    if len(recovered) != len(files):
         return False
-
-    for filename in file_list:
-        info = zf.getinfo(filename)
-        if 0 < info.file_size <= 6:
-            choice = input(
-                timestamped_prompt(
-                    loc(
-                        locale,
-                        f'[!] 压缩包 {zip_file} 中的 {filename} 为短明文（{info.file_size} 字节），是否进行短明文 CRC32 枚举恢复？（y/n）',
-                        f'[!] "{filename}" in "{zip_file}" is short plaintext ({info.file_size} bytes). Run short-plaintext CRC32 enumeration recovery? (y/n) ',
-                    )
-                )
-            )
-            if choice.strip().lower() == "y":
-                print(
-                    loc(
-                        locale,
-                        f"[+] {filename} 在 ZIP 中记录的 CRC32：{info.CRC}",
-                        f"[+] CRC32 stored in ZIP for {filename}: {info.CRC}",
-                    )
-                )
-                raw = crack_crc(filename, info.CRC, info.file_size, locale)
-                if raw is not None:
-                    recovered[filename] = raw
-                    cracked_all += 1
-
-    if cracked_all >= len(file_list):
-        if out_dir is not None:
-            context = extraction_context if extraction_context is not None else ExtractionContext()
-            plan = extraction_plan(zf, context)
-            with staged_output(out_dir) as staging:
-                for info, name in plan:
-                    target = os.path.join(staging, *name.split("/"))
-                    if info.is_dir():
-                        os.makedirs(target, exist_ok=True)
-                        continue
-                    os.makedirs(os.path.dirname(target), exist_ok=True)
-                    raw = recovered[info.filename]
-                    if context.budget:
-                        context.budget.consume(len(raw))
-                    with open(target, "wb") as fp:
-                        fp.write(raw)
-            context.names = list(dict.fromkeys(name for info, name in plan if not info.is_dir()))
-            context.completed = True
-        print(
-            loc(
-                locale,
-                f"[*] {zip_file} 内全部条目均已通过短明文 CRC32 枚举恢复，将跳过字典暴力破解。",
-                f"[*] All entries in {zip_file} were recovered via short-plaintext CRC32 enumeration; skipping dictionary attack.",
-            )
-        )
-        return True
-    return False
+    if out_dir is not None:
+        with staged_output(out_dir) as staging:
+            for info, name in plan:
+                target = os.path.join(staging, *name.split("/"))
+                if info.is_dir():
+                    os.makedirs(target, exist_ok=True)
+                    continue
+            for name, raw in recovered.items():
+                target = os.path.join(staging, *name.split("/"))
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                if context.budget:
+                    context.budget.consume(len(raw))
+                with open(target, "wb") as fp:
+                    fp.write(raw)
+        context.names = list(files)
+        context.completed = True
+    print(loc(locale, f"[*] {zip_file} 的全部条目均已无歧义恢复，跳过字典攻击。",
+              f"[*] All entries in {zip_file} were recovered unambiguously; skipping dictionary attack."))
+    return True
 
 
 def adjust_thread_count(max_limit: int = 128) -> int:
@@ -3466,6 +3635,12 @@ def count_passwords(file_path: str) -> int:
     if last_byte and last_byte != b"\n":
         total += 1
     return total
+
+
+def resolve_builtin_dictionary() -> str:
+    if os.path.isfile("password_list.txt"):
+        return "password_list.txt"
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "password_list.txt")
 
 
 def iter_password_file_batches_with_progress(
@@ -3600,6 +3775,9 @@ def prepare_kpa_context(
             locale,
         )
         plaintext_bytes = plain_source["plaintext_bytes"]
+        if not plaintext_bytes:
+            raise ValueError(loc(locale, "已知明文不能为空；空载荷无法验证密码。",
+                                 "Known plaintext must not be empty; an empty payload cannot verify a password."))
         if len(plaintext_bytes) != payload_len:
             raise ValueError(
                 describe_kpa_plaintext_length_mismatch(
@@ -3626,19 +3804,19 @@ def prepare_kpa_context(
 def try_fast_password_from_plaintext(
     ciphertext: bytes, plaintext_bytes: bytes
 ) -> Optional[str]:
-    seen: set[str] = set()
-
+    if not plaintext_bytes or len(ciphertext) != 12 + len(plaintext_bytes):
+        return None
     def try_one(password: str) -> Optional[str]:
-        if password in seen:
-            return None
-        seen.add(password)
         if zipcrypto_plaintext_matches_password(password, ciphertext, plaintext_bytes):
             return password
         return None
 
-    if os.path.isfile("password_list.txt"):
+    # Keep memory bounded while streaming; retaining every numeric guess in a
+    # global deduplication set costs memory without helping the unique generator.
+    dictionary = resolve_builtin_dictionary()
+    if os.path.isfile(dictionary):
         try:
-            for batch in iter_password_file_batches("password_list.txt", 4096):
+            for batch in iter_password_file_batches(dictionary, 4096):
                 for password in batch:
                     hit = try_one(password)
                     if hit is not None:
@@ -3843,6 +4021,7 @@ def run_bkcrack_known_plaintext_attack(
     plain_source_override: Optional[dict] = None,
     attempt_label: str = "",
     extraction_context: Optional[ExtractionContext] = None,
+    attack_timeout: Optional[float] = None,
 ) -> bool:
     bk = bk_path or find_bkcrack_executable()
     if not bk:
@@ -3958,10 +4137,13 @@ def run_bkcrack_known_plaintext_attack(
                 cmd_attack,
                 stdout=log_fp,
                 stderr=subprocess.STDOUT,
-                timeout=None,
+                timeout=attack_timeout,
             )
         with open(log_path, "r", encoding="utf-8", errors="replace") as log_fp:
             combined = log_fp.read()
+    except subprocess.TimeoutExpired:
+        print(loc(locale, "[!] 自动模板 KPA 超时，保留原包并继续。", "[!] Automatic template KPA timed out; original kept."))
+        return False
     except FileNotFoundError:
         print(loc(locale, "[!] 无法执行 bkcrack。", "[!] Unable to execute bkcrack."))
         return False
@@ -4132,6 +4314,7 @@ def run_bkcrack_known_plaintext_attempts(
     bk_path: Optional[str] = None,
     *,
     extraction_context: Optional[ExtractionContext] = None,
+    deadline: Optional[float] = None,
 ) -> bool:
     bk = bk_path or find_bkcrack_executable()
     if not bk:
@@ -4146,6 +4329,9 @@ def run_bkcrack_known_plaintext_attempts(
 
     total = len(attempts)
     for index, attempt in enumerate(attempts, start=1):
+        remaining = None if deadline is None else deadline - time.monotonic()
+        if remaining is not None and remaining <= 0:
+            return False
         if total > 1:
             print(
                 loc(
@@ -4166,6 +4352,7 @@ def run_bkcrack_known_plaintext_attempts(
             plain_source_override=attempt.plain_source,
             attempt_label=attempt.label,
             extraction_context=extraction_context,
+            attack_timeout=remaining,
         ):
             return True
         if total > 1 and index < total:
@@ -4198,8 +4385,11 @@ class PasswordVerifier:
         self._thread_local = threading.local()
 
         with zipfile.ZipFile(zip_file, "r") as zf:
-            self.verification_entry = find_best_verification_entry(zf)
-            self.verification_entry_size = zf.getinfo(self.verification_entry).file_size if self.verification_entry else 0
+            info = find_best_verification_info(zf)
+            self.verification_entry = info.filename if info is not None else None
+            self.verification_entry_size = info.file_size if info is not None else 0
+            self.verification_entry_index = zf.infolist().index(info) if info is not None else None
+            self._zipcrypto_header = read_zipcrypto_check_header(zip_file, info) if info is not None else None
             self.archive_names = zf.namelist()
 
     def _open_archive(self):
@@ -4212,6 +4402,8 @@ class PasswordVerifier:
         if archive is None:
             archive = self._open_archive()
             self._thread_local.archive = archive
+            if self.verification_entry_index is not None:
+                self._thread_local.verification_info = archive.infolist()[self.verification_entry_index]
         return archive
 
     def close_thread_archive(self) -> None:
@@ -4243,23 +4435,28 @@ class PasswordVerifier:
         if not self.verification_entry:
             return False
         archive = self._get_thread_archive()
+        info = self._thread_local.verification_info
         if self.verification_entry_size <= STREAM_READ_CHUNK_SIZE:
-            archive.read(self.verification_entry, pwd=password_bytes)
+            archive.read(info, pwd=password_bytes)
         else:
-            with archive.open(self.verification_entry, pwd=password_bytes) as source:
+            with archive.open(info, pwd=password_bytes) as source:
                 while source.read(STREAM_READ_CHUNK_SIZE):
                     pass
         return True
 
     def verify_password(self, password: str) -> bool:
-        if self.kpa_ciphertext is not None and self.kpa_plaintext_bytes is not None:
-            return zipcrypto_plaintext_matches_password(
-                password, self.kpa_ciphertext, self.kpa_plaintext_bytes
-            )
-
-        password_bytes = password.encode("utf-8")
         try:
+            password_bytes = password.encode("utf-8")
+            if self._zipcrypto_header is not None:
+                header, check = self._zipcrypto_header
+                if _ZipDecrypter(password_bytes)(header)[11] != check:
+                    return False
+            if self.kpa_ciphertext is not None and self.kpa_plaintext_bytes is not None:
+                if not zipcrypto_plaintext_matches_password(password, self.kpa_ciphertext, self.kpa_plaintext_bytes):
+                    return False
             return self._verify_password_once(password_bytes)
+        except UnicodeEncodeError:
+            return False
         except RuntimeError:
             return False
         except KeyboardInterrupt:
@@ -4353,8 +4550,7 @@ def format_current_password(password: str, max_chars: int = 48) -> str:
 
 
 def display_progress(locale: str, state: ProgressState, start_time: float) -> None:
-    while not state.finished_event.is_set():
-        time.sleep(0.1)
+    while not state.finished_event.wait(0.1):
         with state.lock:
             attempted = state.attempted_passwords
             total = state.total_passwords
@@ -4411,6 +4607,8 @@ def run_parallel_passwords(
     source_label: str = "",
     source_bytes_total: int = 0,
 ) -> bool:
+    if max_workers < 1:
+        raise ValueError("Password search needs at least one worker")
     progress = ProgressState()
     progress.reset(
         total_passwords,
@@ -4429,6 +4627,13 @@ def run_parallel_passwords(
         maxsize=resolve_prefetch_batches(max_workers)
     )
     workers: list[threading.Thread] = []
+    worker_errors: list[BaseException] = []
+
+    def record_worker_error(exc: BaseException) -> None:
+        with progress.lock:
+            if not worker_errors:
+                worker_errors.append(exc)
+        progress.stop_event.set()
 
     def worker() -> None:
         try:
@@ -4453,10 +4658,17 @@ def run_parallel_passwords(
                             attempted = 0
                     if attempted:
                         progress.record_attempts(attempted, last_password)
+                except BaseException as exc:
+                    # Stay alive to drain queued batches and sentinels. Exiting
+                    # here would strand task_done/put/join and hang the producer.
+                    record_worker_error(exc)
                 finally:
                     task_queue.task_done()
         finally:
-            verifier.close_thread_archive()
+            try:
+                verifier.close_thread_archive()
+            except BaseException as exc:
+                record_worker_error(exc)
 
     for _ in range(max_workers):
         thread = threading.Thread(target=worker, daemon=True)
@@ -4464,6 +4676,7 @@ def run_parallel_passwords(
         workers.append(thread)
 
     producer_error: Optional[BaseException] = None
+    source_exhausted = False
     try:
         for batch in password_batches:
             if progress.stop_event.is_set():
@@ -4477,10 +4690,13 @@ def run_parallel_passwords(
                 )
             if passwords:
                 task_queue.put(batch)
+        else:
+            source_exhausted = True
     except BaseException as exc:
         producer_error = exc
+        progress.stop_event.set()
     finally:
-        if source_bytes_total > 0:
+        if source_exhausted and source_bytes_total > 0:
             progress.update_source_progress(
                 source_bytes_read=source_bytes_total,
                 source_bytes_total=source_bytes_total,
@@ -4498,8 +4714,10 @@ def run_parallel_passwords(
 
     if producer_error is not None:
         raise producer_error
+    if worker_errors:
+        raise worker_errors[0]
 
-    if progress.found_password:
+    if progress.found_password is not None:
         print(
             loc(
                 locale,
@@ -4538,15 +4756,16 @@ def crack_password_with_mask(
     out_dir: str,
     *,
     interactive: bool = True,
+    batch: bool = False,
 ) -> bool:
     token_groups, total_passwords = parse_mask(mask)
     if total_passwords > 100_000_000_000:
-        if not interactive or not sys.stdin.isatty():
+        if batch or not interactive or not sys.stdin.isatty():
             print(
                 loc(
                     locale,
-                    f"[!] 非交互模式下拒绝超大掩码（共 {total_passwords:,} 种组合），请缩小范围或在交互终端运行。",
-                    f"[!] Refusing an oversized mask in non-interactive mode ({total_passwords:,} combinations). Narrow the mask or use an interactive terminal.",
+                    f"[!] 批量/非交互模式下拒绝超大掩码（共 {total_passwords:,} 种组合），请缩小范围。",
+                    f"[!] Refusing an oversized mask in batch/non-interactive mode ({total_passwords:,} combinations). Narrow the mask.",
                 )
             )
             return False
@@ -4810,7 +5029,7 @@ def print_banner(locale: str) -> None:
      / /_| | |_) | | |___| | | (_| | (__|   <  __/ |   
     /____|_| .__/___\____|_|  \__,_|\___|_|\_\___|_|   
            |_| |_____|                                 
-    #Coded By Asaotomo         Update:2026.10.07 (v2.2.0)
+    #Coded By Asaotomo         Update:2026.10.09 (v2.2.1)
             """,
             r"""                          
      ______          ____                _   [*]Hx0 Team
@@ -4819,7 +5038,7 @@ def print_banner(locale: str) -> None:
      / /_| | |_) | | |___| | | (_| | (__|   <  __/ |   
     /____|_| .__/___\____|_|  \__,_|\___|_|\_\___|_|   
            |_| |_____|                                 
-    #Coded By Asaotomo         Update:2026.10.07 (v2.2.0)
+    #Coded By Asaotomo         Update:2026.10.09 (v2.2.1)
             """,
         )
     )
@@ -4852,6 +5071,10 @@ def print_usage(locale: str, script_name: str) -> None:
         raw_print("         └─ Defaults: depth 2048, archives 4096 (including outer), total extraction 1GiB. Failed archives and original input are kept; --keep-nested-zips also keeps successful intermediate ZIPs.")
         raw_print("\n--- Optional Arguments ---")
         raw_print(f"[*] Specify Output Directory: python {script_name} ... -o YourOutDir")
+        raw_print("[*] Batch mode: --batch (bounded CRC/template recovery; skip installation and oversized masks)")
+        raw_print("[*] CRC budgets per archive: --crc-max-candidates 1000000 --crc-timeout 5")
+        raw_print("[*] CRC candidates: --crc-candidates (5–6 byte candidates saved separately; never count as success)")
+        raw_print("[*] Automatic template key-search budget per archive: --template-timeout 60")
         raw_print("[*] KPA offset: --kpa-offset 78")
         raw_print("[*] KPA extra bytes: -x 0 4d5a  (repeatable; also accepts 0:4d5a)")
         raw_print(f"[*] KPA templates: --kpa-template {' | '.join(KPA_TEMPLATE_CHOICES)}")
@@ -4880,6 +5103,10 @@ def print_usage(locale: str, script_name: str) -> None:
     raw_print("         └─ 默认深度 2048、包数量 4096（含最外层）、累计解压 1GiB；失败包和最外层输入始终保留，--keep-nested-zips 也保留成功的中间包。")
     raw_print("\n--- 可选参数 ---")
     raw_print(f"[*] 指定输出目录:  python {script_name} ... -o YourOutDir")
+    raw_print("[*] 批量模式: --batch（有预算的 CRC32 / 模板恢复；跳过安装和超大掩码）")
+    raw_print("[*] 每包 CRC32 预算: --crc-max-candidates 1000000 --crc-timeout 5")
+    raw_print("[*] CRC32 候选: --crc-candidates（5～6 字节候选单独保存，不计为成功）")
+    raw_print("[*] 每包自动模板密钥搜索预算: --template-timeout 60")
     raw_print("[*] KPA 偏移量:    --kpa-offset 78")
     raw_print("[*] KPA 附加字节:  -x 0 4d5a  (可重复；也支持 0:4d5a)")
     raw_print(f"[*] KPA 模板:      --kpa-template {' | '.join(KPA_TEMPLATE_CHOICES)}")
@@ -4950,7 +5177,7 @@ def build_nested_options(options: ZipCrackerOptions) -> ZipCrackerOptions:
     """嵌套层复用字典/掩码设置；已知明文参数只对最外层有意义，逐层丢弃。"""
     nested = copy.copy(options)
     nested.interactive = False
-    nested.basic_default_mode = False
+    nested.basic_default_mode = options.batch and options.dict_path_or_mask_flag is None
     nested.kpa_plain_path = None
     nested.kpa_inner_name = None
     nested.kpa_offset = None
@@ -5147,6 +5374,15 @@ def run_crack_pipeline(
         options.extraction_budget = ExtractionBudget(options.nested_max_total_size)
     extraction = ExtractionContext(budget=options.extraction_budget)
 
+    def try_crc_recovery() -> bool:
+        with zipfile.ZipFile(zip_file) as zf:
+            return get_crc(
+                zip_file, zf, locale, interactive=options.interactive,
+                batch=options.batch, allow_candidates=options.crc_candidates,
+                max_candidates=options.crc_max_candidates, timeout=options.crc_timeout,
+                out_dir=out_dir, extraction_context=extraction,
+            )
+
     def extracted_outcome() -> CrackOutcome:
         return CrackOutcome(
             success=extraction.completed,
@@ -5215,8 +5451,8 @@ def run_crack_pipeline(
         return outcome
 
     archive_profile = collect_archive_encryption_profile(zip_file)
-    if options.interactive:
-        pyzipper_ready = offer_pyzipper_install(locale, zip_file)
+    if options.interactive or options.batch:
+        pyzipper_ready = offer_pyzipper_install(locale, zip_file, batch=options.batch, interactive=options.interactive)
     else:
         pyzipper_ready = HAS_PYZIPPER
     for line in archive_encryption_notice_lines(
@@ -5333,12 +5569,9 @@ def run_crack_pipeline(
             )
         )
         try:
-            with zipfile.ZipFile(zip_file) as zf:
-                if not kpa_requested:
-                    # 短明文 CRC32 枚举恢复；若包内条目全部由此完成则直接结束流程
-                    if get_crc(zip_file, zf, locale, interactive=options.interactive,
-                               out_dir=out_dir, extraction_context=extraction):
-                        return extracted_outcome()
+            if not kpa_requested and dict_path_or_mask_flag is None:
+                if try_crc_recovery():
+                    return extracted_outcome()
         except zipfile.BadZipFile:
             print(
                 loc(
@@ -5413,6 +5646,8 @@ def run_crack_pipeline(
                     bk_tool = offer_bkcrack_install(
                         locale,
                         required=bool(use_bkcrack_recover or partial_kpa_mode),
+                        batch=options.batch,
+                        interactive=options.interactive,
                     )
 
                 if use_bkcrack_recover:
@@ -5484,8 +5719,13 @@ def run_crack_pipeline(
                 )
                 return outcome
             if crack_password_with_mask(
-                zip_file, mask_value, verifier, locale, out_dir, interactive=options.interactive
+                zip_file, mask_value, verifier, locale, out_dir, interactive=options.interactive,
+                batch=options.batch,
             ):
+                return extracted_outcome()
+            if (not kpa_requested and not verifier.extraction_error
+                    and parse_mask(mask_value)[1] <= 100_000_000_000
+                    and try_crc_recovery()):
                 return extracted_outcome()
             return outcome
 
@@ -5506,12 +5746,12 @@ def run_crack_pipeline(
                 out_dir,
             ):
                 return extracted_outcome()
+            if not kpa_requested and not verifier.extraction_error and try_crc_recovery():
+                return extracted_outcome()
             return outcome
 
         found = False
-        built_in_dict = "password_list.txt"
-        if not os.path.isfile(built_in_dict):
-            built_in_dict = os.path.join(os.path.dirname(os.path.abspath(__file__)), "password_list.txt")
+        built_in_dict = resolve_builtin_dictionary()
         if os.path.isfile(built_in_dict):
             found = crack_password_with_file(
                 zip_file,
@@ -5542,6 +5782,9 @@ def run_crack_pipeline(
             out_dir,
             locale,
             extraction_context=extraction,
+            batch=options.batch,
+            interactive=options.interactive,
+            timeout=options.template_kpa_timeout,
         ):
             return extracted_outcome()
         return outcome
@@ -5756,6 +5999,35 @@ def run_cli(locale: str = "zh") -> int:
             elif arg == "--keep-nested-zips":
                 options.keep_nested_zips = True
                 index += 1
+            elif arg in ("--batch", "--crc-candidates"):
+                if arg == "--batch":
+                    options.batch = True
+                else:
+                    options.crc_candidates = True
+                index += 1
+            elif arg in ("--crc-max-candidates", "--crc-timeout", "--template-timeout"):
+                if index + 1 >= len(sys.argv):
+                    print(loc(locale, f"[!] {arg} 缺少参数。", f"[!] Missing value for {arg}."))
+                    return 1
+                value = sys.argv[index + 1]
+                try:
+                    if arg == "--crc-max-candidates":
+                        limit = int(value)
+                        if limit < 1:
+                            raise ValueError(value)
+                        options.crc_max_candidates = limit
+                    else:
+                        seconds = float(value)
+                        if not math.isfinite(seconds) or seconds <= 0:
+                            raise ValueError(value)
+                        if arg == "--crc-timeout":
+                            options.crc_timeout = seconds
+                        else:
+                            options.template_kpa_timeout = seconds
+                except ValueError:
+                    print(loc(locale, f"[!] {arg} 的预算值无效: {value}", f"[!] Invalid budget for {arg}: {value}"))
+                    return 1
+                index += 2
             elif arg in ("--max-archives", "--max-total-size"):
                 if index + 1 >= len(sys.argv):
                     print(loc(locale, f"[!] {arg} 缺少参数。", f"[!] Missing value for {arg}."))
@@ -5791,6 +6063,10 @@ def run_cli(locale: str = "zh") -> int:
         options.basic_default_mode = (
             options.dict_path_or_mask_flag is None and not kpa_requested
         )
+
+        if options.batch:
+            print(loc(locale, "[*] 批量模式：自动执行有预算的恢复；默认跳过安装和不确定 CRC32 候选。",
+                      "[*] Batch mode: bounded automatic recovery; installation and ambiguous CRC32 candidates are skipped by default."))
 
         outcome = run_crack_pipeline(zip_file, locale, options)
         if outcome.success and outcome.extracted and options.recursive:

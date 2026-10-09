@@ -1,12 +1,14 @@
-### ZipCracker v2.2.0 — User Guide
+### ZipCracker v2.2.1 — User Guide
+
+**Update:2026.10.09 (v2.2.1)**
 
 [中文](./README.md)
 
-**Stable release:** [v2.2.0](https://github.com/asaotomo/ZipCracker/releases/tag/v2.2.0) · [Download the complete ZIP bundle](https://github.com/asaotomo/ZipCracker/releases/download/v2.2.0/ZipCracker-v2.2.0.zip) · [Changelog](./CHANGELOG.md)
+**Stable release:** [v2.2.1](https://github.com/asaotomo/ZipCracker/releases/tag/v2.2.1) · [Download the complete ZIP bundle](https://github.com/asaotomo/ZipCracker/releases/download/v2.2.1/ZipCracker-v2.2.1.zip) · [Changelog](./CHANGELOG.md)
 
 **ZipCracker** is a **comprehensive ZIP cracking and recovery tool** developed by **Team Hx0**. It is a strong fit for **common ZIP challenges in CTF**, as well as **authorized security testing** and **recovering your own encrypted backups**. It combines **pseudo-encryption detection and repair, dictionary attacks, mask attacks, short-plaintext CRC32 preimage search, known-plaintext attack (KPA), and nested ZIP recovery** into one workflow, with **fast loading of huge wordlists, multi-threaded scheduling**, and **automatic extraction** after success so you can analyze and recover ZIPs **efficiently**.
 
-**New in v2.2.0:** recursive extraction with `-r`, intermediate cleanup only after complete extraction, backups of colliding output files, and fixes for Windows Unicode output, bundled dictionary lookup, and CRC32 recovery status. Existing commands remain supported.
+**New in v2.2.1:** unattended recovery with `--batch` and the test07 CTF sample; faster CRC32 and known-plaintext password checks, including binary short contents; isolated CRC32 collision candidates; fixes for duplicate-entry password verification and worker-error hangs. Existing commands remain supported.
 
 Use **`ZipCracker_en.py`** for English UI; **`ZipCracker.py`** is the Chinese UI. Both call the same core.
 
@@ -18,9 +20,10 @@ Use **`ZipCracker_en.py`** for English UI; **`ZipCracker.py`** is the Chinese UI
 - Standard dictionary attacks
 - Custom wordlist file or directory of wordlists
 - Mask attacks
-- Short-plaintext recovery via CRC32 enumeration (1–6 byte entries)
+- Short-plaintext recovery via CRC32 enumeration (1–4 bytes; separate candidate analysis for 5–6 bytes)
 - Known-plaintext attack (`-kpa`)
 - Nested ZIP extraction (`-r` / `--recursive`)
+- Batch mode (`--batch`, automatic answers with CRC32/template computation budgets)
 - Auto-extract after a successful crack
 
 If you are new here, these three sections are enough to get started:
@@ -48,9 +51,12 @@ python3 ZipCracker_en.py outer.zip -r
 
 # 5. Huge wordlist (recommended)
 ZIPCRACKER_SKIP_DICT_COUNT=1 python3 ZipCracker_en.py target.zip huge_dict.txt
+
+# 6. Unattended nested recovery
+python3 ZipCracker_en.py test07.zip -r --batch -o test07_out
 ```
 
-Download and extract the complete bundle, then run these commands from its `ZipCracker-v2.2.0` directory. Replace `outer.zip`, `target.zip`, and `huge_dict.txt` with your own paths. `test01.zip` through `test06.zip` are bundled examples; `test06.zip` is the nested one (see [Nested ZIP extraction](#8-nested-zip-extraction)).
+Download and extract the complete bundle, then run these commands from its `ZipCracker-v2.2.1` directory. Replace `outer.zip`, `target.zip`, and `huge_dict.txt` with your own paths. `test01.zip` through `test07.zip` are bundled examples; `test06.zip` is the nested one (see [Nested ZIP extraction](#8-nested-zip-extraction)), and `test07.zip` is a [CTF batch/CRC32 collision fixture](docs/TEST07_CTF_SAMPLE.md).
 
 ### Runtime environment
 
@@ -178,10 +184,17 @@ python3 ZipCracker_en.py test02.zip YourDictDirectory
 
 #### 4. Short-plaintext CRC32 enumeration
 
-For ZIP entries **1–6 bytes** long, the tool can enumerate printable plaintexts whose CRC32 matches the stored value. An interactive terminal asks before starting. Only actual candidate matches count as recovered; when all file entries are recovered, their contents are saved to the output directory. CRC32 collisions are possible, so a candidate is not necessarily the unique original plaintext.
+For legacy encrypted entries **1–4 bytes** long, the tool directly solves the stored CRC32 for the original contents. With correct length and CRC32 metadata, this length range has a unique preimage. Interactive mode asks first; `--batch` consents automatically. A cached CRC32 inverse linear transform needs at most 32 elimination steps per entry and supports arbitrary binary bytes, including `00` and `FF`. All entries in one archive share a default budget of 1 million candidate/solve attempts and 5 seconds; each short-entry solve consumes one attempt. Reaching either limit continues the recovery pipeline. Clear short entries are read directly; AES entries skip CRC32 recovery. Explicit dictionaries and masks are tried first, with CRC32 recovery attempted after failure.
+
+**5–6 byte matches can collide** and are skipped by default. Enable `--crc-candidates` for candidate analysis. Candidates are written separately to `<output_directory>_crc_candidates`; they never count as success, overwrite normal extraction output, or permit source-archive cleanup. Inner candidate directories sit beside the corresponding `nested_NNNN_name` directory. Password verification continues, and unresolved recovery returns status `1`. Candidate bytes also consume the recursive extraction budget.
+
+Candidate analysis enumerates only a 1–2 byte printable prefix, directly solves the remaining four bytes and checks that the entire candidate is printable. This needs at most 100/10000 prefixes for five/six bytes, with one budget attempt per prefix. These faster matches remain unverified candidates.
 
 ```bash
 python3 ZipCracker_en.py test03.zip
+
+# Explicit 5–6 byte candidate analysis, with a larger budget
+python3 ZipCracker_en.py target.zip --batch --crc-candidates --crc-max-candidates 10000000 --crc-timeout 10
 ```
 
 <img width="2034" height="654" alt="fdf63111-adc6-4b5a-9f26-18e053c590c3" src="https://github.com/user-attachments/assets/cd902438-c9e2-4842-811c-3d2ce7fa56e4" />
@@ -311,13 +324,60 @@ python3 ZipCracker_en.py test06.zip -r
 | `--max-total-size SIZE` | Cumulative extracted bytes; default 1GiB; accepts bytes, KiB, MiB, GiB |
 | `--keep-nested-zips` | Keep successfully extracted intermediate archives |
 
-Size accounting includes intermediate ZIPs and bytes written by failed attempts. Deleting intermediate ZIPs does not restore the budget. These limits apply to recursive mode only. The outer archive keeps the usual interactive workflow; inner layers do not repeatedly prompt for CRC32 enumeration or dependency installation. KPA plaintext/template settings apply only to the outer archive. Exit status is `0` for complete success and `1` if any inner archive remains unresolved or a limit is reached.
+Size accounting includes intermediate ZIPs and bytes written by failed attempts. Deleting intermediate ZIPs does not restore the budget. These limits apply to recursive mode only. Inner layers never read keyboard input; `--batch` enables bounded CRC32 recovery there. Without an explicit dictionary or mask, inner layers also try built-in templates after standard recovery fails. User-supplied KPA plaintext/entry/template settings apply only to the outer archive. Exit status is `0` for complete success and `1` if any inner archive remains unresolved or a limit is reached.
 
 See [Output directory](#7-output-directory) for output and backup behavior.
 
+#### 9. Batch mode (`--batch`)
+
+```bash
+python3 ZipCracker_en.py target.zip --batch
+python3 ZipCracker_en.py outer.zip my_dict.txt -r --batch
+```
+
+| Operation | Batch behavior |
+| :--- | :--- |
+| 1–4 byte CRC32 recovery | Consent automatically, sharing candidate/time budgets per archive |
+| 5–6 byte CRC32 candidates | Skip by default; explicitly enable with `--crc-candidates`; save separately, never count as success |
+| Built-in template KPA | Try after default recovery fails; also applies to inner layers without explicit dictionaries/masks |
+| `pyzipper` / `bkcrack` installation | Skip by default; explicit installation environment variables still take precedence |
+| Masks exceeding 100 billion candidates | Refuse and return failure |
+
+Budget values must be positive; `0`, `nan`, and `inf` are rejected:
+
+| Option | Default and scope |
+| :--- | :--- |
+| `--crc-max-candidates N` | 1000000 candidate/solve attempts shared by all CRC32 entries in each archive |
+| `--crc-timeout SEC` | 5 seconds shared by each archive's CRC32 computation; checked every 1024 steps, excluding time waiting for confirmation |
+| `--template-timeout SEC` | 60 seconds shared by automatic template key searches per archive in batch mode |
+
+CRC32 budgets also apply to interactive recovery and explicit candidate analysis. A template key-search timeout terminates that search and keeps the source archive. Explicit `-kpa` / `--kpa-template` attacks do not use the automatic-template budget. Dependency probes, extraction, dictionaries/masks and later password recovery have their own flows; these options are not a deadline for the entire run. Recursive depth, archive-count and extraction-byte limits still apply.
+
+The project's `test07.zip` is a typical combined CTF sample with 6 ZIP archives including the outer archive and a maximum inner depth of 3. Recovery uses a weak-password dictionary for the outer layer, repairs a pseudo-encrypted wrapper, then handles three branches: short flag shards, a CRC32 collision trap and a plain ZIP. Use it to validate batch mode and nested recovery:
+
+```bash
+python3 ZipCracker_en.py test07.zip -r --batch -o test07_out
+```
+
+The normal run requires no keyboard input, returns exit status `0` and saves its results to `test07_out`:
+
+1. Recover the 8 shards in `01_crc_shards.zip`, each 3–4 bytes long, through CRC32. Concatenating them in filename order produces `flag{batch_crc32_safe_recovery}`.
+2. Skip ambiguous CRC32 enumeration for the 5-byte entry in `02_crc_collision.zip` by default. Actual decryption with dictionary password `123456` recovers the original `aRQ\,`.
+3. Extract the plain branch directly, remove the 5 successfully processed intermediate ZIPs by default and keep the original `test07.zip`.
+
+The provided `test07_dict.txt` also validates explicit dictionary recovery followed by CRC32 fallback. It contains only the outer and collision-branch passwords, so the short shard branch still needs CRC32 recovery:
+
+```bash
+python3 ZipCracker_en.py test07.zip test07_dict.txt -r --batch -o test07_dict_out
+```
+
+The collision trap's original `aRQ\,` and candidate `00000` have the same length and CRC32 but different contents. Finding a candidate alone never counts as successful recovery or permits removal of its source archive. See the [test07 sample guide](docs/TEST07_CTF_SAMPLE.md) for flag concatenation, the intentional collision failure test and budget validation.
+
+This feature builds on [@halfcity789's PR #23](https://github.com/asaotomo/ZipCracker/pull/23), adding collision-candidate isolation and computation budgets.
+
 ### Non-interactive execution and exit status
 
-When run from scripts, CI, or with redirected input, manual CRC32 enumeration and installation prompts are skipped and available recovery methods continue. Dependency auto-installation can also be configured through the environment variables listed below. Masks exceeding 100 billion candidates require confirmation in an interactive terminal; non-interactive runs stop and ask you to narrow the range.
+Without `--batch`, scripts, CI and redirected input skip CRC32 prompts and manual installation while available recovery methods continue. `--crc-candidates` explicitly enables bounded candidate analysis. With `--batch`, automatic answers follow the table above; installation environment variables can override the defaults. Masks exceeding 100 billion candidates require normal interactive confirmation and are refused in batch/non-interactive mode.
 
 - `0`: the requested operation succeeded; in recursive mode all discovered inner archives were handled
 - `1`: failure, including unresolved/corrupt inner archives or archives skipped because of resource limits
@@ -325,7 +385,7 @@ When run from scripts, CI, or with redirected input, manual CRC32 enumeration an
 
 ### Version and tests
 
-Current version: `2.2.0`. See [CHANGELOG.md](./CHANGELOG.md). Existing commands, both language entry points, and optional dependency installation remain supported.
+Current version: `2.2.1`. See [CHANGELOG.md](./CHANGELOG.md). Existing commands, both language entry points, and optional dependency installation remain supported.
 
 ```bash
 python3 -m unittest discover -s tests -v

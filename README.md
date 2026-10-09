@@ -1,12 +1,14 @@
-### ZipCracker v2.2.0 —— 使用说明
+### ZipCracker v2.2.1 —— 使用说明
+
+**Update:2026.10.09 (v2.2.1)**
 
 [English](./README_EN.md)
 
-**稳定版本：** [v2.2.0](https://github.com/asaotomo/ZipCracker/releases/tag/v2.2.0) · [下载完整 ZIP 包](https://github.com/asaotomo/ZipCracker/releases/download/v2.2.0/ZipCracker-v2.2.0.zip) · [更新日志](./CHANGELOG.md)
+**稳定版本：** [v2.2.1](https://github.com/asaotomo/ZipCracker/releases/tag/v2.2.1) · [下载完整 ZIP 包](https://github.com/asaotomo/ZipCracker/releases/download/v2.2.1/ZipCracker-v2.2.1.zip) · [更新日志](./CHANGELOG.md)
 
 **ZipCracker** 是 **Hx0 战队**开发的一款**面向 ZIP 压缩包的综合破解与恢复工具**，非常适用于新手拿来解决 **CTF 常见 ZIP 题型**，也适用于经授权的**安全测试**和**自有加密备份恢复**场景。它将**伪加密识别与修复、字典爆破、掩码猜解、短明文 CRC32 枚举、已知明文攻击、套娃 ZIP 逐层恢复**等常见手段整合为一条完整流程，支持**超大字典快速加载、多线程高并发调度**，并在命中后**自动解压**，帮助用户更**高效**地完成 ZIP 分析与恢复。
 
-**v2.2.0 更新：** 新增 `-r` 套娃解压；完整提取成功后才清理中间包；输出同名旧文件先备份；修复 Windows 中文输出、内置字典查找和 CRC32 恢复结果判断等问题。原有命令继续可用。
+**v2.2.1 更新：** 新增 `--batch` 无人值守恢复与 test07 CTF 样例；加速 CRC32 和已知明文口令校验，支持二进制短内容；隔离 CRC32 碰撞候选，修复重名条目密码验证与线程异常挂起。原有命令继续可用。
 
 <img width="3020" height="1574" alt="image" src="https://github.com/user-attachments/assets/240d75b0-16dd-4777-9143-38916fd7253b" />
 
@@ -19,6 +21,7 @@
 - 短明文 CRC32 枚举恢复
 - 已知明文攻击（`-kpa`）
 - 套娃解压（`-r`，递归处理嵌套压缩包）
+- 批量模式（`--batch`，自动应答并限制 CRC32 / 自动模板计算）
 - 破解成功后自动解压
 
 如果你只是第一次使用，这份 README 看下面 3 个部分就够了：
@@ -46,9 +49,12 @@ python3 ZipCracker.py outer.zip -r
 
 # 5. 超大字典推荐写法
 ZIPCRACKER_SKIP_DICT_COUNT=1 python3 ZipCracker.py target.zip huge_dict.txt
+
+# 6. 无人值守套娃恢复
+python3 ZipCracker.py test07.zip -r --batch -o test07_out
 ```
 
-下载并解压完整 ZIP 包后，在其中的 `ZipCracker-v2.2.0` 目录运行。`outer.zip`、`target.zip` 和 `huge_dict.txt` 为示例路径，请替换成自己的文件；`test01.zip`～`test06.zip` 是随包提供的样例，其中 `test06.zip` 是套娃解压样例（见[套娃解压](#8-套娃解压递归处理嵌套压缩包)）。
+下载并解压完整 ZIP 包后，在其中的 `ZipCracker-v2.2.1` 目录运行。`outer.zip`、`target.zip` 和 `huge_dict.txt` 为示例路径，请替换成自己的文件；`test01.zip`～`test07.zip` 是随包提供的样例，其中 `test06.zip` 是套娃解压样例（见[套娃解压](#8-套娃解压递归处理嵌套压缩包)），`test07.zip` 是[批量模式与 CRC32 碰撞验证题](docs/TEST07_CTF_SAMPLE.md)。
 
 ### 运行环境
 
@@ -179,10 +185,17 @@ python3 ZipCracker.py test02.zip YourDictDirectory
 
 #### 4. 短明文 CRC32 枚举恢复
 
-对 ZIP 中长度为 1～6 字节的条目，可按归档记录的 CRC32 对可打印字符内容进行原像枚举；交互终端会先询问是否执行。仅在找到匹配候选时计为恢复成功；全部文件条目恢复成功后，结果会写入输出目录。CRC32 匹配可能存在碰撞，候选内容不一定是唯一原文。
+对传统 ZIP 加密中长度为 1～4 字节的条目，可按归档记录的 CRC32 直接求解内容；在长度和 CRC32 元数据正确的前提下，这一长度范围的原像唯一。交互终端会先询问；`--batch` 自动尝试。算法使用缓存的 CRC32 线性逆变换，每个条目最多做 32 步消元，不再枚举字符组合，同时支持 `00`、`FF` 等二进制字节。每个包共享默认 100 万次候选/求解尝试、5 秒计算预算；短条目每次求解计一次，达到任一限制就继续后续破解。未加密短条目直接读取，AES 条目跳过 CRC32 恢复。明确提供字典或掩码时，先尝试指定方法，失败后才尝试 CRC32。
+
+5～6 字节可能发生 CRC32 碰撞，默认跳过。需要分析候选时显式加 `--crc-candidates`；候选保存到 `<输出目录>_crc_candidates`，不会覆盖正常提取结果，也不计为成功或允许清理来源包。内层候选目录与对应的 `nested_序号_包名` 目录并列。即使找到候选，程序仍继续密码验证；最终未恢复时退出码为 `1`。候选写入也计入套娃累计解压预算。
+
+5～6 字节候选分析只枚举 1～2 字节的可打印前缀，并直接求解剩余 4 字节，再检查候选是否全部可打印；最多检查 100 / 10000 个前缀，每个前缀计一次预算。该加速不会改变候选的未验证性质。
 
 ```bash
 python3 ZipCracker.py test03.zip
+
+# 显式分析 5～6 字节候选；可按需增加预算
+python3 ZipCracker.py target.zip --batch --crc-candidates --crc-max-candidates 10000000 --crc-timeout 10
 ```
 
 <img width="1616" height="656" alt="730083af-ad56-4490-be43-770445d26589" src="https://github.com/user-attachments/assets/aacc320b-e473-475e-b290-ed0b885888f0" />
@@ -311,7 +324,7 @@ python3 ZipCracker.py outer.zip -r
 2. 每一层解压到输出目录下独立的 `nested_序号_包名` 目录，避免同名覆盖，也避免上千层链路在 Windows 上触发超长路径问题
 3. 只有完整解压成功的中间压缩包才会自动删除；最外层输入包始终保留。想保留所有中间包请加 `--keep-nested-zips`
 4. 深度、包数量、累计解压字节数均有上限，达到限制时保留未处理包；内层未完成时退出码为 `1`，全部完成为 `0`
-5. 嵌套层不重复询问 CRC32 枚举或安装依赖；最外层仍保留交互流程。KPA 明文/模板参数仅作用于最外层，内层复用字典/掩码
+5. 嵌套层不读键盘；`--batch` 可对内层执行有预算的 CRC32 恢复。未指定字典或掩码时，批量模式还会在内层常规恢复失败后尝试内置模板。用户指定的 KPA 明文/条目/模板参数仅作用于最外层
 6. 损坏包、部分条目解压失败或密码不一致的包会保留，并在结束时统一列出
 
 随包提供的 `test06.zip` 就是一个五层套娃样例，各层分别走内置字典（最外层、第 2 层）、伪加密修复（第 1 层）、1-6 位纯数字字典（第 3 层）和直接解压（第 4 层）四条不同路径，可用来验证整条递归流程：
@@ -343,9 +356,56 @@ python3 ZipCracker.py outer.zip my_dict.txt -r --max-total-size 8GiB --max-archi
 
 输出目录与备份规则见[指定输出目录](#7-指定输出目录)。
 
+#### 9. 批量模式（`--batch`）
+
+```bash
+python3 ZipCracker.py target.zip --batch
+python3 ZipCracker.py outer.zip my_dict.txt -r --batch
+```
+
+| 操作 | 批量模式行为 |
+| :--- | :--- |
+| 1～4 字节 CRC32 恢复 | 自动尝试，每包共享候选数和时间预算 |
+| 5～6 字节 CRC32 候选 | 默认跳过；`--crc-candidates` 显式启用，单独保存，不计成功 |
+| 内置模板 KPA | 默认破解流程失败后自动尝试；无显式字典/掩码的内层也适用 |
+| `pyzipper` / `bkcrack` 安装 | 默认跳过；显式安装环境变量仍可覆盖 |
+| 超过 1000 亿组合的掩码 | 拒绝执行，返回失败 |
+
+计算预算参数均接受正值，不支持 `0`、`nan` 或 `inf`：
+
+| 参数 | 默认值与范围 |
+| :--- | :--- |
+| `--crc-max-candidates N` | 每个包所有 CRC32 条目共享 1000000 次候选/求解尝试 |
+| `--crc-timeout SEC` | 每个包 CRC32 计算共享 5 秒；每 1024 次检查一次时间，等待确认不计时 |
+| `--template-timeout SEC` | 批量模式每个包的自动模板密钥搜索共享 60 秒 |
+
+CRC32 预算也适用于交互模式和显式候选分析。模板密钥搜索超时会结束该搜索并保留原包；显式 `-kpa` / `--kpa-template` 攻击不受自动模板预算影响。依赖探测、提取、字典/掩码及后续口令反推有各自流程，上述参数不是整次运行的总时限。套娃的深度、包数、解压字节限制也继续生效。
+
+项目提供的 `test07.zip` 是一个典型的 CTF 综合样例，包含最外层在内共 6 个 ZIP，最大内层深度为 3。外层走弱口令字典，下一层修复伪加密，再分别处理短明文 flag 片段、CRC32 碰撞陷阱和普通明文 ZIP，可用来验证批量模式与套娃恢复：
+
+```bash
+python3 ZipCracker.py test07.zip -r --batch -o test07_out
+```
+
+正常运行无需键盘应答，退出码为 `0`，结果保存在 `test07_out`：
+
+1. `01_crc_shards.zip` 中的 8 个片段各为 3～4 字节，通过 CRC32 恢复，按文件名顺序拼接得到 `flag{batch_crc32_safe_recovery}`
+2. `02_crc_collision.zip` 中的 5 字节内容默认跳过 CRC32 候选枚举，使用字典口令 `123456` 实际解密，恢复原文 `aRQ\,`
+3. 明文分支直接解压；成功处理的 5 个中间 ZIP 默认删除，原始 `test07.zip` 保留
+
+也可以使用项目提供的 `test07_dict.txt` 验证自定义字典与 CRC32 回退流程。该字典只包含外层和碰撞分支的口令，短片段分支仍需通过 CRC32 恢复：
+
+```bash
+python3 ZipCracker.py test07.zip test07_dict.txt -r --batch -o test07_dict_out
+```
+
+碰撞陷阱中的原文 `aRQ\,` 与候选 `00000` 长度相同、CRC32 相同，但内容不同。仅找到候选不会算作恢复成功，也不会删除来源包。flag 拼接命令、碰撞失败测试和预算限制验证见 [test07 样例说明](docs/TEST07_CTF_SAMPLE.md)。
+
+该功能吸收了 [@halfcity789 的 PR #23](https://github.com/asaotomo/ZipCracker/pull/23) 的批量模式建议，并加入碰撞候选隔离与计算预算。
+
 ### 非交互运行与退出码
 
-在脚本、流水线或输入被重定向时，程序会跳过 CRC32 枚举和手动安装询问，继续可用的恢复流程；是否自动安装依赖也可通过文末的环境变量配置。超过 1000 亿组合的掩码需要在交互终端确认，非交互环境会停止并提示缩小范围。
+未加 `--batch` 时，脚本、流水线或重定向输入环境会跳过 CRC32 询问和手动安装，继续可用恢复流程；`--crc-candidates` 可显式启用有预算的候选分析。加 `--batch` 后按上表自动应答。安装环境变量可显式覆盖默认值。超过 1000 亿组合的掩码只允许普通交互模式确认，批量或非交互模式会拒绝。
 
 - `0`：所请求的处理成功；套娃模式下所有发现的内层包均处理完成
 - `1`：处理失败，或套娃模式仍有未恢复、损坏或因资源限制而跳过的包
@@ -353,7 +413,7 @@ python3 ZipCracker.py outer.zip my_dict.txt -r --max-total-size 8GiB --max-archi
 
 ### 版本与测试
 
-当前版本：`2.2.0`。变化见 [CHANGELOG.md](./CHANGELOG.md)。旧命令、两种语言入口及可选依赖方式保持兼容。
+当前版本：`2.2.1`。变化见 [CHANGELOG.md](./CHANGELOG.md)。旧命令、两种语言入口及可选依赖方式保持兼容。
 
 ```bash
 python3 -m unittest discover -s tests -v

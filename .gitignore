@@ -1,4 +1,33 @@
 __pycache__/
 *.py[cod]
-unzipped_files/
+unzipped_files*/
 dist/
+
+# Local agent records, credentials and generated output
+.codex*/
+.DS_Store
+Thumbs.db
+desktop.ini
+.env
+.env.*
+*.log
+*.patch
+.zipcracker-extract-*/
+*_backup_*/
+*_crc_candidates/
+test07_out*/
+test07_dict_out*/
+test07_probe*/
+test07_budget*/
+test07_keep*/
+test07_outer_only.txt
+benchmark*.zip
+benchmark*.json
+benchmark_payload.txt
+.pytest_cache/
+.coverage
+
+# Local development measurements; public usage docs and tests remain included
+docs/ALGORITHM_VALIDATION.md
+docs/BATCH_MODE_VALIDATION.md
+scripts/benchmark_algorithms.py

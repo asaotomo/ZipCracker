@@ -325,12 +325,16 @@ class RecursiveTests(unittest.TestCase):
     def test_crc_miss_does_not_report_success(self):
         original = self.write("short.zip", archive([("short.txt", b"\x00")]))
         with zipfile.ZipFile(original) as zf, mock.patch.object(core.sys.stdin, "isatty", return_value=True), mock.patch("builtins.input", return_value="y"), contextlib.redirect_stdout(io.StringIO()):
+            # Zero is not a possible CRC32 for any one-byte message.
+            zf.getinfo("short.txt").flag_bits |= 1
+            zf.getinfo("short.txt").CRC = 0
             self.assertFalse(core.get_crc(str(original), zf, "en"))
 
     def test_crc_recovery_saves_files(self):
         original = self.write("short.zip", archive([("short.txt", b"a")]))
         extraction = core.ExtractionContext()
         with zipfile.ZipFile(original) as zf, mock.patch.object(core.sys.stdin, "isatty", return_value=True), mock.patch("builtins.input", return_value="y"), contextlib.redirect_stdout(io.StringIO()):
+            zf.getinfo("short.txt").flag_bits |= 1
             self.assertTrue(core.get_crc(str(original), zf, "en", out_dir=str(self.out), extraction_context=extraction))
         self.assertEqual((self.out / "short.txt").read_bytes(), b"a")
         self.assertEqual(extraction.names, ["short.txt"])
