@@ -358,6 +358,7 @@ The project's `test07.zip` is a typical combined CTF sample with 6 ZIP archives 
 ```bash
 python3 ZipCracker_en.py test07.zip -r --batch -o test07_out
 ```
+<img width="1547" height="940" alt="image" src="https://github.com/user-attachments/assets/fe159101-8434-4067-a5b2-07d6e653813f" />
 
 The normal run requires no keyboard input, returns exit status `0` and saves its results to `test07_out`:
 
@@ -370,6 +371,7 @@ The provided `test07_dict.txt` also validates explicit dictionary recovery follo
 ```bash
 python3 ZipCracker_en.py test07.zip test07_dict.txt -r --batch -o test07_dict_out
 ```
+<img width="1547" height="940" alt="image" src="https://github.com/user-attachments/assets/2c0cb82b-7b82-4aca-aa5b-da50d3b3decf" />
 
 The collision trap's original `aRQ\,` and candidate `00000` have the same length and CRC32 but different contents. Finding a candidate alone never counts as successful recovery or permits removal of its source archive. See the [test07 sample guide](docs/TEST07_CTF_SAMPLE.md) for flag concatenation, the intentional collision failure test and budget validation.
 
