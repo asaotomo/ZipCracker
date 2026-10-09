@@ -387,6 +387,8 @@ CRC32 预算也适用于交互模式和显式候选分析。模板密钥搜索�
 python3 ZipCracker.py test07.zip -r --batch -o test07_out
 ```
 
+<img width="1547" height="940" alt="image" src="https://github.com/user-attachments/assets/29621d7f-5f69-4fc5-b4f7-daf595fd4525" />
+
 正常运行无需键盘应答，退出码为 `0`，结果保存在 `test07_out`：
 
 1. `01_crc_shards.zip` 中的 8 个片段各为 3～4 字节，通过 CRC32 恢复，按文件名顺序拼接得到 `flag{batch_crc32_safe_recovery}`
@@ -398,6 +400,8 @@ python3 ZipCracker.py test07.zip -r --batch -o test07_out
 ```bash
 python3 ZipCracker.py test07.zip test07_dict.txt -r --batch -o test07_dict_out
 ```
+
+<img width="1547" height="940" alt="image" src="https://github.com/user-attachments/assets/00902dac-7cbd-432d-ae16-2a8a358ffb18" />
 
 碰撞陷阱中的原文 `aRQ\,` 与候选 `00000` 长度相同、CRC32 相同，但内容不同。仅找到候选不会算作恢复成功，也不会删除来源包。flag 拼接命令、碰撞失败测试和预算限制验证见 [test07 样例说明](docs/TEST07_CTF_SAMPLE.md)。
 
