@@ -169,11 +169,13 @@ class ExtractionLimitError(ValueError):
 class ExtractionBudget:
     max_bytes: int
     written_bytes: int = 0
+    locale: str = "en"
 
     def check(self, size: int) -> None:
         if size > self.max_bytes - self.written_bytes:
             raise ExtractionLimitError(
-                f"解压总量超过限制 / Total extraction limit exceeded ({self.max_bytes} bytes)"
+                loc(self.locale, f"解压总量超过限制（{self.max_bytes} 字节）",
+                    f"Total extraction limit exceeded ({self.max_bytes} bytes)")
             )
 
     def consume(self, size: int) -> None:
@@ -186,6 +188,7 @@ class ExtractionContext:
     budget: Optional[ExtractionBudget] = None
     names: list[str] = field(default_factory=list)
     completed: bool = False
+    locale: str = "en"
 
 
 @dataclass
@@ -3062,12 +3065,13 @@ def extract_with_bkcrack_keys(
 ) -> tuple[bool, list[str] | str]:
     k0, k1, k2 = keys
     context = extraction_context if extraction_context is not None else ExtractionContext()
+    context.locale = locale
     context.completed = False
     context.names = []
     extracted_names: list[str] = []
 
     try:
-        with zipfile.ZipFile(zip_path, "r") as zf, staged_output(out_dir) as staging:
+        with zipfile.ZipFile(zip_path, "r") as zf, staged_output(out_dir, locale=locale) as staging:
             plan = extraction_plan(zf, context)
             for info, name in plan:
                 dest_path = os.path.join(staging, *name.split("/"))
@@ -3230,12 +3234,14 @@ def extraction_plan(zf, context: ExtractionContext) -> list[tuple[object, str]]:
             or any(":" in part or "\x00" in part for part in parts)
             or kind not in (0, stat.S_IFREG, stat.S_IFDIR)
         ):
-            raise ValueError(f"不安全的 ZIP 路径 / Unsafe ZIP member: {info.filename!r}")
+            raise ValueError(loc(context.locale, f"不安全的 ZIP 路径：{info.filename!r}",
+                                 f"Unsafe ZIP member: {info.filename!r}"))
         name = "/".join(parts)
         key = os.path.normcase(name).replace("\\", "/")
         is_dir = info.is_dir()
         if key in seen and seen[key] != is_dir:
-            raise ValueError(f"ZIP 路径冲突 / Conflicting ZIP member: {name!r}")
+            raise ValueError(loc(context.locale, f"ZIP 路径冲突：{name!r}",
+                                 f"Conflicting ZIP member: {name!r}"))
         seen[key] = is_dir
         plan.append((info, name))
         if not is_dir:
@@ -3244,22 +3250,25 @@ def extraction_plan(zf, context: ExtractionContext) -> list[tuple[object, str]]:
         parent = key.rpartition("/")[0]
         while parent:
             if parent in seen and not seen[parent]:
-                raise ValueError(f"ZIP 路径冲突 / Conflicting ZIP paths: {key!r}")
+                raise ValueError(loc(context.locale, f"ZIP 路径冲突：{key!r}",
+                                     f"Conflicting ZIP paths: {key!r}"))
             parent = parent.rpartition("/")[0]
     if context.budget:
         context.budget.check(total)
     return plan
 
 
-def publish_extraction(staging: str, destination: str) -> None:
+def publish_extraction(staging: str, destination: str, *, locale: str = "en") -> None:
     """Keep -o paths compatible; preserve collisions and roll back a failed merge."""
     if os.path.islink(destination):
-        raise ValueError(f"输出目录不可为符号链接 / Output must not be a symlink: {destination}")
+        raise ValueError(loc(locale, f"输出目录不可为符号链接：{destination}",
+                             f"Output must not be a symlink: {destination}"))
     if not os.path.exists(destination):
         os.rename(staging, destination)
         return
     if not os.path.isdir(destination):
-        raise ValueError(f"输出路径不是目录 / Output is not a directory: {destination}")
+        raise ValueError(loc(locale, f"输出路径不是目录：{destination}",
+                             f"Output is not a directory: {destination}"))
     if not os.listdir(destination):
         os.rmdir(destination)
         os.rename(staging, destination)
@@ -3300,11 +3309,12 @@ def publish_extraction(staging: str, destination: str) -> None:
             shutil.rmtree(backup)
         raise
     if backup:
-        print(f"[*] 同名旧文件已备份 / Previous output files backed up: {backup}")
+        print(loc(locale, f"[*] 同名旧文件已备份：{backup}",
+                  f"[*] Previous output files backed up: {backup}"))
 
 
 @contextmanager
-def staged_output(out_dir: str):
+def staged_output(out_dir: str, *, locale: str = "en"):
     """Validate and stage all bytes before changing the output directory."""
     destination = os.path.abspath(out_dir)
     parent = os.path.realpath(os.path.dirname(destination))
@@ -3313,7 +3323,7 @@ def staged_output(out_dir: str):
     staging = tempfile.mkdtemp(prefix=".zipcracker-extract-", dir=parent)
     try:
         yield staging
-        publish_extraction(staging, destination)
+        publish_extraction(staging, destination, locale=locale)
     finally:
         if staging is not None:
             shutil.rmtree(staging, ignore_errors=True)
@@ -3325,7 +3335,7 @@ def extract_archive(zf, out_dir: str, context: Optional[ExtractionContext] = Non
     context.names = []
     plan = extraction_plan(zf, context)
     names = []
-    with staged_output(out_dir) as staging:
+    with staged_output(out_dir, locale=context.locale) as staging:
         for info, name in plan:
             target = os.path.join(staging, *name.split("/"))
             if info.is_dir():
@@ -3501,6 +3511,7 @@ def get_crc(
 ) -> bool:
     """Only complete, unambiguous recovery can publish output and permit cleanup."""
     context = extraction_context if extraction_context is not None else ExtractionContext()
+    context.locale = locale
     context.completed = False
     context.names = []
     plan = extraction_plan(zf, context)
@@ -3552,8 +3563,8 @@ def get_crc(
                 candidates[name] = raw
 
     if candidates and out_dir is not None:
-        candidate_dir = resolve_extraction_destination(zip_file, os.path.abspath(out_dir) + "_crc_candidates")
-        with staged_output(candidate_dir) as staging:
+        candidate_dir = resolve_extraction_destination(zip_file, os.path.abspath(out_dir) + "_crc_candidates", locale=locale)
+        with staged_output(candidate_dir, locale=locale) as staging:
             for name, raw in candidates.items():
                 target = os.path.join(staging, *name.split("/"))
                 os.makedirs(os.path.dirname(target), exist_ok=True)
@@ -3567,7 +3578,7 @@ def get_crc(
     if len(recovered) != len(files):
         return False
     if out_dir is not None:
-        with staged_output(out_dir) as staging:
+        with staged_output(out_dir, locale=locale) as staging:
             for info, name in plan:
                 target = os.path.join(staging, *name.split("/"))
                 if info.is_dir():
@@ -5138,12 +5149,14 @@ def _is_path_inside(child: str, parent: str) -> bool:
         return False
 
 
-def resolve_extraction_destination(zip_file: str, out_dir: str) -> str:
+def resolve_extraction_destination(zip_file: str, out_dir: str, *, locale: str = "en") -> str:
     """Keep existing output contents in place; allocate a fresh result directory."""
     if os.path.islink(out_dir):
-        raise ValueError(f"输出目录不可为符号链接 / Output must not be a symlink: {out_dir}")
+        raise ValueError(loc(locale, f"输出目录不可为符号链接：{out_dir}",
+                             f"Output must not be a symlink: {out_dir}"))
     if os.path.exists(out_dir) and not os.path.isdir(out_dir):
-        raise ValueError(f"输出路径不是目录 / Output is not a directory: {out_dir}")
+        raise ValueError(loc(locale, f"输出路径不是目录：{out_dir}",
+                             f"Output is not a directory: {out_dir}"))
     if not _is_path_inside(zip_file, out_dir):
         return out_dir
     stem = os.path.splitext(os.path.basename(zip_file))[0]
@@ -5383,10 +5396,12 @@ def run_crack_pipeline(
 ) -> CrackOutcome:
     """对单个 ZIP 执行完整破解流水线（伪加密修复 → CRC32 → KPA → 字典/掩码/模板）。"""
     outcome = CrackOutcome()
-    out_dir = resolve_extraction_destination(zip_file, options.out_dir)
+    out_dir = resolve_extraction_destination(zip_file, options.out_dir, locale=locale)
     if options.recursive and options.extraction_budget is None:
-        options.extraction_budget = ExtractionBudget(options.nested_max_total_size)
-    extraction = ExtractionContext(budget=options.extraction_budget)
+        options.extraction_budget = ExtractionBudget(options.nested_max_total_size, locale=locale)
+    if options.extraction_budget is not None:
+        options.extraction_budget.locale = locale
+    extraction = ExtractionContext(budget=options.extraction_budget, locale=locale)
 
     def try_crc_recovery() -> bool:
         with zipfile.ZipFile(zip_file) as zf:
